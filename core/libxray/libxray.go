@@ -74,6 +74,7 @@ func Start(configJSON string, tunFd int32) error {
 		return fmt.Errorf("start xray: %w", err)
 	}
 	instance = inst
+	installLogHandler(inst)
 	return nil
 }
 
@@ -133,6 +134,8 @@ func MeasureDelay(configJSON string, testURL string, timeoutMs int32) (int64, er
 		return -1, err
 	}
 	inst, err := core.New(cfg)
+	// The throwaway instance has replaced the process-wide logger; give it back to the running one.
+	restoreLogHandler()
 	if err != nil {
 		return -1, err
 	}
