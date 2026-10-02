@@ -18,8 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xtls/xray-core/app/observatory"
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/extension"
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -129,6 +131,10 @@ func MeasureDelay(configJSON string, testURL string, timeoutMs int32) (int64, er
 	if err != nil {
 		return -1, err
 	}
+	return measureStripped(stripped, testURL, time.Duration(timeoutMs)*time.Millisecond)
+}
+
+func measureStripped(stripped string, testURL string, timeout time.Duration) (int64, error) {
 	cfg, err := loadConfig(stripped)
 	if err != nil {
 		return -1, err
@@ -144,7 +150,7 @@ func MeasureDelay(configJSON string, testURL string, timeoutMs int32) (int64, er
 		return -1, err
 	}
 	defer inst.Close()
-	return httpDelay(inst, testURL, time.Duration(timeoutMs)*time.Millisecond)
+	return httpDelay(inst, testURL, timeout)
 }
 
 // MeasureRunningDelay measures delay through the currently running instance (respecting its routing).
@@ -177,18 +183,29 @@ func stripForDelayTest(configJSON string) (string, error) {
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return "", fmt.Errorf("parse config: %w", err)
 	}
+	indexes := proxyOutbounds(cfg)
+	if len(indexes) == 0 {
+		return "", errors.New("config has no proxy outbound")
+	}
+	return stripForOutbound(cfg, indexes[0])
+}
+
+// proxyOutbounds returns the indexes of the outbounds that lead to servers.
+func proxyOutbounds(cfg map[string]any) []int {
 	outbounds, _ := cfg["outbounds"].([]any)
-	proxyIdx := -1
+	var indexes []int
 	for i, o := range outbounds {
 		ob, _ := o.(map[string]any)
 		if p, _ := ob["protocol"].(string); proxyProtocols[p] {
-			proxyIdx = i
-			break
+			indexes = append(indexes, i)
 		}
 	}
-	if proxyIdx < 0 {
-		return "", errors.New("config has no proxy outbound")
-	}
+	return indexes
+}
+
+// stripForOutbound makes a config whose only route is the outbound at proxyIdx.
+func stripForOutbound(cfg map[string]any, proxyIdx int) (string, error) {
+	outbounds, _ := cfg["outbounds"].([]any)
 	// The first outbound is the default route; keep the others so dialerProxy chains still resolve.
 	ordered := make([]any, 0, len(outbounds))
 	ordered = append(ordered, outbounds[proxyIdx])
@@ -202,6 +219,43 @@ func stripForDelayTest(configJSON string) (string, error) {
 		out["dns"] = dns
 	}
 	b, err := json.Marshal(out)
+	return string(b), err
+}
+
+type outboundDelay struct {
+	Tag   string `json:"tag"`
+	Delay int64  `json:"delay"`
+}
+
+// MeasureOutbounds measures every server of a config separately (the servers of an auto-select
+// config) and returns JSON: [{"tag":"proxy","delay":120},{"tag":"proxy-2","delay":-1}, ...].
+func MeasureOutbounds(configJSON string, testURL string, timeoutMs int32) (string, error) {
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return "", fmt.Errorf("parse config: %w", err)
+	}
+	outbounds, _ := cfg["outbounds"].([]any)
+	indexes := proxyOutbounds(cfg)
+	results := make([]outboundDelay, len(indexes))
+	var wg sync.WaitGroup
+	for n, idx := range indexes {
+		ob, _ := outbounds[idx].(map[string]any)
+		tag, _ := ob["tag"].(string)
+		results[n] = outboundDelay{Tag: tag, Delay: -1}
+		wg.Add(1)
+		go func(n, idx int) {
+			defer wg.Done()
+			stripped, err := stripForOutbound(cfg, idx)
+			if err != nil {
+				return
+			}
+			if ms, err := measureStripped(stripped, testURL, time.Duration(timeoutMs)*time.Millisecond); err == nil {
+				results[n].Delay = ms
+			}
+		}(n, idx)
+	}
+	wg.Wait()
+	b, err := json.Marshal(results)
 	return string(b), err
 }
 
@@ -234,4 +288,77 @@ func httpDelay(inst *core.Instance, testURL string, timeout time.Duration) (int6
 		return -1, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	return time.Since(start).Milliseconds(), nil
+}
+
+type serverCheck struct {
+	Tag   string `json:"tag"`
+	Alive bool   `json:"alive"`
+	Delay int64  `json:"delay"`
+	All   int64  `json:"all"`
+	Fail  int64  `json:"fail"`
+}
+
+// ObservatoryStatus returns the server checks of the running instance (what auto-select picks
+// from) as JSON: [{"tag":"proxy-2","alive":true,"delay":120,"all":1,"fail":0}, ...]; empty when
+// the config has no observatory.
+func ObservatoryStatus() string {
+	mu.Lock()
+	inst := instance
+	mu.Unlock()
+	if inst == nil {
+		return ""
+	}
+	obs, ok := inst.GetFeature(extension.ObservatoryType()).(extension.Observatory)
+	if !ok || obs == nil {
+		return ""
+	}
+	msg, err := obs.GetObservation(context.Background())
+	if err != nil {
+		return ""
+	}
+	result, ok := msg.(*observatory.ObservationResult)
+	if !ok {
+		return ""
+	}
+	checks := make([]serverCheck, 0, len(result.Status))
+	for _, s := range result.Status {
+		c := serverCheck{Tag: s.OutboundTag, Alive: s.Alive, Delay: s.Delay}
+		if s.HealthPing != nil {
+			c.All, c.Fail = s.HealthPing.All, s.HealthPing.Fail
+		}
+		checks = append(checks, c)
+	}
+	b, _ := json.Marshal(checks)
+	return string(b)
+}
+
+// RecheckServers makes auto-select check all its servers right now instead of waiting for the
+// next round (after the phone wakes up, or when a server it used stops answering). It returns
+// when the checks are done.
+func RecheckServers() {
+	mu.Lock()
+	inst := instance
+	mu.Unlock()
+	if inst == nil {
+		return
+	}
+	feature := inst.GetFeature(extension.ObservatoryType())
+	checker, ok := feature.(interface{ Check([]string) })
+	obs, ok2 := feature.(extension.Observatory)
+	if !ok || !ok2 {
+		return
+	}
+	msg, err := obs.GetObservation(context.Background())
+	if err != nil {
+		return
+	}
+	result, ok := msg.(*observatory.ObservationResult)
+	if !ok || len(result.Status) == 0 {
+		return
+	}
+	tags := make([]string, 0, len(result.Status))
+	for _, s := range result.Status {
+		tags = append(tags, s.OutboundTag)
+	}
+	checker.Check(tags)
 }
