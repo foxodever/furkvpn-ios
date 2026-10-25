@@ -10,29 +10,52 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"github.com/xtls/xray-core/app/observatory"
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/extension"
+	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
-
-	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 var (
 	mu       sync.Mutex
 	instance *core.Instance
 )
+
+// Xray keeps some state per process rather than per instance: the log handler, and the DNS client
+// and outbound manager its dialer uses (servers with a domain name are resolved through that DNS
+// client). Every core.New takes them over, so a throwaway delay-test instance would leave the
+// running VPN resolving its servers through a closed instance: lookups time out after 4 seconds
+// and auto-select, which gives a server 3 seconds, sees its servers as down. createMu serializes
+// core.New with putting the state back; running is the instance it belongs to.
+var (
+	createMu sync.Mutex
+	running  atomic.Pointer[core.Instance]
+)
+
+// restoreRunningLocked gives the process-wide state back to the running instance. Hold createMu.
+func restoreRunningLocked() {
+	inst := running.Load()
+	if inst == nil {
+		return
+	}
+	installLogHandler(inst)
+	if dnsClient, ok := inst.GetFeature(dns.ClientType()).(dns.Client); ok {
+		obm, _ := inst.GetFeature(outbound.ManagerType()).(outbound.Manager)
+		internet.InitSystemDialer(dnsClient, obm)
+	}
+}
 
 // XrayVersion returns the embedded Xray-core version.
 func XrayVersion() string {
@@ -63,11 +86,13 @@ func Start(configJSON string, tunFd int32) error {
 	} else {
 		_ = os.Unsetenv(platform.TunFdKey)
 	}
-	cfg, err := loadConfig(configJSON)
+	cfg, err := loadConfig(withServersResolvedDirectly(configJSON))
 	if err != nil {
 		return err
 	}
+	createMu.Lock()
 	inst, err := core.New(cfg)
+	createMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("create xray instance: %w", err)
 	}
@@ -76,7 +101,11 @@ func Start(configJSON string, tunFd int32) error {
 		return fmt.Errorf("start xray: %w", err)
 	}
 	instance = inst
-	installLogHandler(inst)
+	createMu.Lock()
+	running.Store(inst)
+	// A delay test may have created its instance after this one and taken over the process-wide state.
+	restoreRunningLocked()
+	createMu.Unlock()
 	return nil
 }
 
@@ -87,6 +116,7 @@ func Stop() error {
 	if instance == nil {
 		return nil
 	}
+	running.Store(nil)
 	err := instance.Close()
 	instance = nil
 	_ = os.Unsetenv(platform.TunFdKey)
@@ -123,171 +153,12 @@ func QueryStats(name string, reset bool) int64 {
 	return c.Value()
 }
 
-// MeasureDelay starts a throwaway instance from configJSON (inbounds, routing and
-// observatories removed, so traffic goes straight to the first proxy outbound) and
-// returns the time in milliseconds needed to fetch testURL through it.
-func MeasureDelay(configJSON string, testURL string, timeoutMs int32) (int64, error) {
-	stripped, err := stripForDelayTest(configJSON)
-	if err != nil {
-		return -1, err
-	}
-	return measureStripped(stripped, testURL, time.Duration(timeoutMs)*time.Millisecond)
-}
-
-func measureStripped(stripped string, testURL string, timeout time.Duration) (int64, error) {
-	cfg, err := loadConfig(stripped)
-	if err != nil {
-		return -1, err
-	}
-	inst, err := core.New(cfg)
-	// The throwaway instance has replaced the process-wide logger; give it back to the running one.
-	restoreLogHandler()
-	if err != nil {
-		return -1, err
-	}
-	if err := inst.Start(); err != nil {
-		_ = inst.Close()
-		return -1, err
-	}
-	defer inst.Close()
-	return httpDelay(inst, testURL, timeout)
-}
-
-// MeasureRunningDelay measures delay through the currently running instance (respecting its routing).
-func MeasureRunningDelay(testURL string, timeoutMs int32) (int64, error) {
-	mu.Lock()
-	inst := instance
-	mu.Unlock()
-	if inst == nil {
-		return -1, errors.New("xray is not running")
-	}
-	return httpDelay(inst, testURL, time.Duration(timeoutMs)*time.Millisecond)
-}
-
 func loadConfig(configJSON string) (*core.Config, error) {
 	cfg, err := serial.LoadJSONConfig(strings.NewReader(configJSON))
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	return cfg, nil
-}
-
-var proxyProtocols = map[string]bool{
-	"vless": true, "vmess": true, "trojan": true, "shadowsocks": true,
-	"hysteria": true, "wireguard": true, "socks": true, "http": true,
-}
-
-// stripForDelayTest keeps only what is needed to reach the first proxy outbound.
-func stripForDelayTest(configJSON string) (string, error) {
-	var cfg map[string]any
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return "", fmt.Errorf("parse config: %w", err)
-	}
-	indexes := proxyOutbounds(cfg)
-	if len(indexes) == 0 {
-		return "", errors.New("config has no proxy outbound")
-	}
-	return stripForOutbound(cfg, indexes[0])
-}
-
-// proxyOutbounds returns the indexes of the outbounds that lead to servers.
-func proxyOutbounds(cfg map[string]any) []int {
-	outbounds, _ := cfg["outbounds"].([]any)
-	var indexes []int
-	for i, o := range outbounds {
-		ob, _ := o.(map[string]any)
-		if p, _ := ob["protocol"].(string); proxyProtocols[p] {
-			indexes = append(indexes, i)
-		}
-	}
-	return indexes
-}
-
-// stripForOutbound makes a config whose only route is the outbound at proxyIdx.
-func stripForOutbound(cfg map[string]any, proxyIdx int) (string, error) {
-	outbounds, _ := cfg["outbounds"].([]any)
-	// The first outbound is the default route; keep the others so dialerProxy chains still resolve.
-	ordered := make([]any, 0, len(outbounds))
-	ordered = append(ordered, outbounds[proxyIdx])
-	ordered = append(ordered, outbounds[:proxyIdx]...)
-	ordered = append(ordered, outbounds[proxyIdx+1:]...)
-	out := map[string]any{
-		"log":       map[string]any{"loglevel": "none"},
-		"outbounds": ordered,
-	}
-	if dns, ok := cfg["dns"]; ok {
-		out["dns"] = dns
-	}
-	b, err := json.Marshal(out)
-	return string(b), err
-}
-
-type outboundDelay struct {
-	Tag   string `json:"tag"`
-	Delay int64  `json:"delay"`
-}
-
-// MeasureOutbounds measures every server of a config separately (the servers of an auto-select
-// config) and returns JSON: [{"tag":"proxy","delay":120},{"tag":"proxy-2","delay":-1}, ...].
-func MeasureOutbounds(configJSON string, testURL string, timeoutMs int32) (string, error) {
-	var cfg map[string]any
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return "", fmt.Errorf("parse config: %w", err)
-	}
-	outbounds, _ := cfg["outbounds"].([]any)
-	indexes := proxyOutbounds(cfg)
-	results := make([]outboundDelay, len(indexes))
-	var wg sync.WaitGroup
-	for n, idx := range indexes {
-		ob, _ := outbounds[idx].(map[string]any)
-		tag, _ := ob["tag"].(string)
-		results[n] = outboundDelay{Tag: tag, Delay: -1}
-		wg.Add(1)
-		go func(n, idx int) {
-			defer wg.Done()
-			stripped, err := stripForOutbound(cfg, idx)
-			if err != nil {
-				return
-			}
-			if ms, err := measureStripped(stripped, testURL, time.Duration(timeoutMs)*time.Millisecond); err == nil {
-				results[n].Delay = ms
-			}
-		}(n, idx)
-	}
-	wg.Wait()
-	b, err := json.Marshal(results)
-	return string(b), err
-}
-
-func httpDelay(inst *core.Instance, testURL string, timeout time.Duration) (int64, error) {
-	tr := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dest, err := xnet.ParseDestination(network + ":" + addr)
-			if err != nil {
-				return nil, err
-			}
-			return core.Dial(ctx, inst, dest)
-		},
-		DisableKeepAlives:   true,
-		TLSHandshakeTimeout: timeout,
-	}
-	client := &http.Client{Transport: tr, Timeout: timeout}
-	defer tr.CloseIdleConnections()
-
-	start := time.Now()
-	req, err := http.NewRequest(http.MethodGet, testURL, nil)
-	if err != nil {
-		return -1, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return -1, err
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return -1, fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return time.Since(start).Milliseconds(), nil
 }
 
 type serverCheck struct {
