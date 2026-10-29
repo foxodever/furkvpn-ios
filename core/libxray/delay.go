@@ -31,6 +31,7 @@ func MeasureDelay(configJSON string, testURL string, timeoutMs int32) (int64, er
 	if err != nil {
 		return -1, fmt.Errorf("parse config: %w", err)
 	}
+	upgradeHysteria(cfg)
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	testURL = probeURL(cfg, testURL)
 	indexes := proxyOutbounds(cfg)
@@ -81,6 +82,7 @@ func MeasureOutbounds(configJSON string, testURL string, timeoutMs int32) (strin
 	if err != nil {
 		return "", fmt.Errorf("parse config: %w", err)
 	}
+	upgradeHysteria(cfg)
 	testURL = probeURL(cfg, testURL)
 	indexes := proxyOutbounds(cfg)
 	tags := tagOutbounds(cfg, indexes)

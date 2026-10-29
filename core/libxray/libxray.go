@@ -86,7 +86,7 @@ func Start(configJSON string, tunFd int32) error {
 	} else {
 		_ = os.Unsetenv(platform.TunFdKey)
 	}
-	cfg, err := loadConfig(withServersResolvedDirectly(configJSON))
+	cfg, err := loadConfig(withFixes(configJSON))
 	if err != nil {
 		return err
 	}

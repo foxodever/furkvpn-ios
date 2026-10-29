@@ -18,11 +18,15 @@ func parseConfig(configJSON string) (map[string]any, error) {
 	return cfg, nil
 }
 
-// withServersResolvedDirectly returns configJSON with resolveServersDirectly applied, or
-// unchanged when there is nothing to add.
-func withServersResolvedDirectly(configJSON string) string {
+// withFixes returns configJSON with resolveServersDirectly and upgradeHysteria applied, or
+// unchanged when neither changes anything.
+func withFixes(configJSON string) string {
 	cfg, err := parseConfig(configJSON)
-	if err != nil || !resolveServersDirectly(cfg) {
+	if err != nil {
+		return configJSON
+	}
+	resolved := resolveServersDirectly(cfg)
+	if upgraded := upgradeHysteria(cfg); !resolved && !upgraded {
 		return configJSON
 	}
 	var buf bytes.Buffer
