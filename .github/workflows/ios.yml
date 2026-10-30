@@ -1,0 +1,68 @@
+# Builds the iOS app on a macOS runner. The result (IPA and the end of the build log) is also
+# force-pushed to the "ios-build" branch, so it can be fetched with the repository's deploy key.
+name: iOS
+on:
+  push:
+    branches: [ios]
+    paths: ["ios/**", "core/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ios-build
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: Tools
+        run: |
+          xcodebuild -version
+          brew install xcodegen
+      - name: Core cache
+        id: core
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks/Libxray.xcframework
+          key: libxray-ios-${{ hashFiles('core/**') }}
+      - name: Build Xray-core for iOS
+        if: steps.core.outputs.cache-hit != 'true'
+        working-directory: core
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+          gomobile init
+          gomobile bind -target=ios/arm64 -iosversion=15.0 -trimpath \
+            -ldflags="-s -w -buildid= -checklinkname=0" -o ../ios/Frameworks/Libxray.xcframework ./libxray 2>&1 | tee ../ios/core.log
+      - name: Build the app
+        working-directory: ios
+        run: ./build.sh 2>&1 | tee build.log
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FurkVPN-ios
+          path: ios/build/FurkVPN-*.ipa
+      - name: Result to the ios-build branch
+        if: always()
+        run: |
+          mkdir out
+          cp ios/build/FurkVPN-*.ipa out/ 2>/dev/null || true
+          cp ios/core.log out/ 2>/dev/null || true
+          if [ -f ios/build.log ]; then
+            grep -E 'error:|error |BUILD (SUCCEEDED|FAILED)|\*\* ' ios/build.log | head -300 > out/errors.txt || true
+            tail -n 300 ios/build.log > out/build-tail.log
+          fi
+          echo "${{ github.sha }} ${{ job.status }}" > out/status.txt
+          cd out
+          git init -q -b ios-build
+          git add -A
+          git -c user.name=ci -c user.email=ci@furkapp.net commit -qm "iOS build of ${{ github.sha }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ios-build

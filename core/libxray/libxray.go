@@ -1,8 +1,9 @@
-// Package libxray is a thin gomobile-friendly wrapper around Xray-core for the FurkVPN Android app.
+// Package libxray is a thin gomobile-friendly wrapper around Xray-core for the FurkVPN apps (Android, iOS).
 //
 // The Android side prepares a complete Xray JSON config (subscription config with the
 // inbounds replaced by a "tun" inbound) and passes the VpnService TUN file descriptor.
-// Xray-core reads that descriptor from the "xray.tun.fd" environment flag.
+// Xray-core reads that descriptor from the "xray.tun.fd" environment flag. The iOS tunnel passes
+// the utun descriptor of its NetworkExtension the same way (apple.go).
 package libxray
 
 import (
