@@ -209,7 +209,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * Wi-Fi ↔ mobile or another network: connections to the servers made on the old network are
      * dead but would hang for minutes (and auto-select's checks with them), so the core starts afresh.
      */
-    private func networkChanged(_ path: NWPath) {
+    private func networkChanged(_ path: Network.NWPath) {
         pathSatisfied = path.status == .satisfied
         let interfaces = path.availableInterfaces.filter { $0.type != .other }
         let key = path.status == .satisfied ? interfaces.map { "\($0.type):\($0.name)" }.joined(separator: ",") : ""
