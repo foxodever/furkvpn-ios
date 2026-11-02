@@ -8,8 +8,8 @@ cd "$(dirname "$0")"
 OUT=build
 if [ ! -d Frameworks/Libxray.xcframework ] || [ "${REBUILD_CORE:-0}" = 1 ]; then
   rm -rf Frameworks/Libxray.xcframework
-  (cd ../core && gomobile bind -target=ios/arm64 -iosversion=15.0 -trimpath \
-    -ldflags="-s -w -buildid= -checklinkname=0" -o ../ios/Frameworks/Libxray.xcframework ./libxray)
+  (cd core && gomobile bind -target=ios/arm64 -iosversion=15.0 -trimpath \
+    -ldflags="-s -w -buildid= -checklinkname=0" -o ../Frameworks/Libxray.xcframework ./libxray)
 fi
 xcodegen generate
 xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Release \

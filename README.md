@@ -1,7 +1,7 @@
 # FurkVPN для iOS
 
 iPhone- и iPad-клиент FurkVPN (iOS 15+): SwiftUI-приложение и расширение Packet Tunnel с тем же ядром
-Xray-core и той же Go-обёрткой (`../core/libxray`), что в Android-приложении.
+Xray-core и той же Go-обёрткой (`core/libxray`), что в Android-приложении ([furkvpn-android](https://github.com/foxodever/furkvpn-android)).
 
 ```
 FurkVPN/      приложение: экраны (Views/), подписка и API (Http.swift), VPN-профиль (VPNController.swift)
@@ -13,7 +13,7 @@ build.sh      сборка на macOS: ядро → Frameworks/Libxray.xcframewo
 
 ## Как это работает
 
-- Ключ, подписка, зеркала, `x-hwid` и прочие заголовки, API furkapp.net — как в Android (см. README в корне).
+- Ключ, подписка, зеркала, `x-hwid` и прочие заголовки, API furkapp.net — как в Android (см. [README Android-приложения](https://github.com/foxodever/furkvpn-android#readme)).
   `x-device-os: iOS`, модель — вида `iPhone15,3`. HWID хранится в связке ключей: переустановка приложения —
   то же устройство.
 - Разбор ключа и подписки, правила маршрутизации и сборка конфига туннеля написаны на Go
@@ -39,6 +39,15 @@ build.sh      сборка на macOS: ядро → Frameworks/Libxray.xcframewo
 Чего нет по сравнению с Android: приложений без VPN (iOS не даёт VPN-приложению выбирать приложения),
 раздачи интернета, журнала подключений, определения белых списков, QR-сканера, импорта и экспорта настроек.
 
+## Ядро
+
+`core/` — копия Go-обёртки над Xray-core из [furkvpn-android](https://github.com/foxodever/furkvpn-android) (там она собирается в `libxray.aar`)
+плюс то, что нужно только iOS: разбор ключа и подписки, правила, сборка конфига туннеля (`keys.go`,
+`subscription.go`, `routes.go`, `tunconfig.go`) и вызовы для Swift (`apple.go`). Общие файлы (пинг, `pin.go`,
+`dnsfix.go`, `hysteria.go`, версия Xray в `go.mod`) правятся в обоих репозиториях: исправление в одном нужно
+перенести в другой. Отделено от Android-репозитория 2026-11-02 (ветка `ios`, коммит 92632d7) вместе с историей
+iOS и ядра.
+
 ## Сборка
 
 Нужны macOS с Xcode, Go (версия из `core/go.mod`), gomobile и XcodeGen:
@@ -46,10 +55,10 @@ build.sh      сборка на macOS: ядро → Frameworks/Libxray.xcframewo
 ```bash
 cd core && go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind && gomobile init
 brew install xcodegen
-./ios/build.sh                # → ios/build/FurkVPN-<версия>-unsigned.ipa
+./build.sh                    # → build/FurkVPN-<версия>-unsigned.ipa
 ```
 
-Без Mac собирает GitHub Actions (`.github/workflows/ios.yml`) при пуше в ветку `ios`: IPA и конец журнала
+Без Mac собирает GitHub Actions (`.github/workflows/ios.yml`) при пуше в `main`: IPA и конец журнала
 сборки кладутся в ветку `ios-build` (её можно забрать ключом деплоя) и в артефакты запуска.
 
 **IPA без подписи.** Она подписана ad-hoc с нужными правами (Network Extension, App Group). Поставить её как есть

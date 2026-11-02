@@ -3,8 +3,8 @@
 name: iOS
 on:
   push:
-    branches: [ios]
-    paths: ["ios/**", "core/**", ".github/workflows/ios.yml"]
+    branches: [main]
+    paths-ignore: ["**.md"]
   workflow_dispatch:
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
         id: core
         uses: actions/cache@v4
         with:
-          path: ios/Frameworks/Libxray.xcframework
+          path: Frameworks/Libxray.xcframework
           key: libxray-ios-${{ hashFiles('core/**') }}
       - name: Build Xray-core for iOS
         if: steps.core.outputs.cache-hit != 'true'
@@ -41,24 +41,23 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
           gomobile init
           gomobile bind -target=ios/arm64 -iosversion=15.0 -trimpath \
-            -ldflags="-s -w -buildid= -checklinkname=0" -o ../ios/Frameworks/Libxray.xcframework ./libxray 2>&1 | tee ../ios/core.log
+            -ldflags="-s -w -buildid= -checklinkname=0" -o ../Frameworks/Libxray.xcframework ./libxray 2>&1 | tee ../core.log
       - name: Build the app
-        working-directory: ios
         run: ./build.sh 2>&1 | tee build.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:
           name: FurkVPN-ios
-          path: ios/build/FurkVPN-*.ipa
+          path: build/FurkVPN-*.ipa
       - name: Result to the ios-build branch
         if: always()
         run: |
           mkdir out
-          cp ios/build/FurkVPN-*.ipa out/ 2>/dev/null || true
-          cp ios/core.log out/ 2>/dev/null || true
-          if [ -f ios/build.log ]; then
-            grep -E 'error:|error |BUILD (SUCCEEDED|FAILED)|\*\* ' ios/build.log | head -300 > out/errors.txt || true
-            tail -n 300 ios/build.log > out/build-tail.log
+          cp build/FurkVPN-*.ipa out/ 2>/dev/null || true
+          cp core.log out/ 2>/dev/null || true
+          if [ -f build.log ]; then
+            grep -E 'error:|error |BUILD (SUCCEEDED|FAILED)|\*\* ' build.log | head -300 > out/errors.txt || true
+            tail -n 300 build.log > out/build-tail.log
           fi
           echo "${{ github.sha }} ${{ job.status }}" > out/status.txt
           cd out

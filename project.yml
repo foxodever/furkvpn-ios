@@ -1,5 +1,5 @@
 # XcodeGen spec: `xcodegen generate` turns it into FurkVPN.xcodeproj (the project file is not kept in git).
-# Frameworks/Libxray.xcframework is Xray-core built by gomobile from ../core (see build.sh); Go's
+# Frameworks/Libxray.xcframework is Xray-core built by gomobile from core/ (see build.sh); Go's
 # runtime needs libresolv, Security and CoreFoundation linked next to it.
 name: FurkVPN
 options:
