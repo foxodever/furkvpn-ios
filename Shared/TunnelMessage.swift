@@ -4,8 +4,6 @@ import Foundation
 enum TunnelMessage: Codable {
     /** Traffic counted since the tunnel started. */
     case stats
-    /** Delay through one server, measured by the extension: its sockets bypass the tunnel. */
-    case ping(serverKey: String, url: String, config: String?)
     /** The selected server or the settings changed: start the core again with them. */
     case reload(TunnelPayload?)
 
@@ -19,10 +17,6 @@ struct TunnelStats: Codable {
     var down: Int64
 }
 
-struct TunnelPing: Codable {
-    /** Milliseconds, or nil when the server did not answer. */
-    var ms: Int64?
-}
 
 /**
  * What the extension needs to run: the selected server's raw config and the routing settings.

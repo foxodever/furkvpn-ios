@@ -40,6 +40,8 @@ final class VPNController: ObservableObject {
     private var reloadWhenConnected = false
     /** Why the last connection ended, as iOS tells it (Settings → Диагностика). */
     @Published private(set) var lastError: String?
+    /** Disconnect pressed in the app: no error to look for. */
+    private var userStopped = false
 
     init() {
         observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] note in
@@ -73,8 +75,9 @@ final class VPNController: ObservableObject {
         case .disconnecting: state = .stopping
         default: state = .idle
         }
-        if state == .idle, previous == .connecting || previous == .stopping, Date().timeIntervalSince(startedAt) < 60 {
-            reportStartFailure(connection)
+        if state == .idle, previous != .idle {
+            if !userStopped { reportDisconnect(connection) }
+            userStopped = false
         }
         if case .connected = state, reloadWhenConnected {
             reloadWhenConnected = false
@@ -84,13 +87,14 @@ final class VPNController: ObservableObject {
     }
 
     /**
-     * The tunnel stopped right after a start: the extension's message (shared files) or, from iOS 16,
-     * what iOS says (it also carries the extension's error when there is no shared App Group).
+     * The tunnel stopped by itself (at the start or later, e.g. the extension was killed): the
+     * extension's message (shared files) or, from iOS 16, what iOS says — it also carries the
+     * extension's error when there is no shared App Group. Nothing for a clean stop.
      */
-    private func reportStartFailure(_ connection: NEVPNConnection) {
+    private func reportDisconnect(_ connection: NEVPNConnection) {
         let started = startedAt
         startedAt = .distantPast
-        if let message = Store.tunnelError(since: started) {
+        if Date().timeIntervalSince(started) < 60, let message = Store.tunnelError(since: started) {
             lastError = message
             onError?(message)
             return
@@ -149,6 +153,7 @@ final class VPNController: ObservableObject {
     }
 
     func disconnect() {
+        userStopped = true
         manager?.connection.stopVPNTunnel()
     }
 

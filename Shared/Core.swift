@@ -133,9 +133,12 @@ enum Core {
         return code.isEmpty ? nil : code
     }
 
-    /** Real delay through the server in milliseconds, or nil when it is unreachable. */
-    static func ping(config: String, url: String, timeoutMs: Int32 = 5000) -> Int64? {
-        let ms = LibxrayPing(config, url, timeoutMs)
+    /**
+     * Real delay through the server in milliseconds, or nil when it is unreachable. [interface]
+     * ("en0", "pdp_ip0") binds the test's connections to the phone's own network, past the VPN.
+     */
+    static func ping(config: String, url: String, timeoutMs: Int32 = 5000, interface: String? = nil) -> Int64? {
+        let ms = LibxrayPingVia(config, url, timeoutMs, interface ?? "")
         return ms >= 0 ? ms : nil
     }
 }

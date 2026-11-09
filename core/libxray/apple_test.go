@@ -1,6 +1,9 @@
 package libxray
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestAutoSelectHealth(t *testing.T) {
 	var h autoSelectHealth
@@ -62,5 +65,30 @@ func TestStartTunnelReportsErrors(t *testing.T) {
 	}
 	if Ping("not json", "https://example.com", 100) != -1 {
 		t.Error("ping of a broken config")
+	}
+}
+
+func TestBindInterface(t *testing.T) {
+	out, err := bindInterface(`{"outbounds":[
+	  {"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,"users":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","encryption":"none"}]}]},
+	   "streamSettings":{"network":"xhttp","security":"tls","tlsSettings":{"serverName":"x.example"},"sockopt":{"tcpFastOpen":true,"mark":255}}},
+	  {"tag":"direct","protocol":"freedom"}]}`, "en0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustParse(t, out)
+	outbounds := cfg["outbounds"].([]any)
+	proxy := asMap(asMap(asMap(outbounds[0])["streamSettings"])["sockopt"])
+	if proxy["interface"] != "en0" || proxy["tcpFastOpen"] != true || proxy["mark"] != json.Number("255") {
+		t.Errorf("proxy sockopt = %v", proxy)
+	}
+	if direct := asMap(asMap(asMap(outbounds[1])["streamSettings"])["sockopt"]); direct["interface"] != "en0" {
+		t.Errorf("direct sockopt = %v", direct)
+	}
+	if port := asMap(asMap(asMap(outbounds[0])["settings"])["vnext"].([]any)[0])["port"]; port != json.Number("443") {
+		t.Errorf("port = %#v", port)
+	}
+	if err := ValidateConfig(out); err != nil {
+		t.Errorf("Xray refuses it: %v", err)
 	}
 }

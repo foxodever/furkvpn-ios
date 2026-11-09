@@ -16,9 +16,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let queue = DispatchQueue(label: "com.furkvpn.tunnel.core")
     /** Auto-select checks block for seconds; they must not hold up messages from the app. */
     private let healthQueue = DispatchQueue(label: "com.furkvpn.tunnel.health")
-    private let pingQueue = DispatchQueue(label: "com.furkvpn.tunnel.ping", attributes: .concurrent)
-    /** At most this many delay tests at once: each one is a whole Xray instance, and memory is tight here. */
-    private let pingSlots = DispatchSemaphore(value: 3)
 
     private var tunFd: Int32 = -1
     private var running = false
@@ -308,13 +305,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             queue.async {
                 if self.running { self.sampleTraffic() }
                 completionHandler?(try? JSONEncoder().encode(TunnelStats(up: self.totalUp, down: self.totalDown)))
-            }
-        case let .ping(serverKey, url, config):
-            pingQueue.async {
-                self.pingSlots.wait()
-                defer { self.pingSlots.signal() }
-                let ms = (config ?? Store.config(for: serverKey)).flatMap { Core.ping(config: $0, url: url) }
-                completionHandler?(try? JSONEncoder().encode(TunnelPing(ms: ms)))
             }
         case let .reload(sent):
             queue.async {

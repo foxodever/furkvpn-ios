@@ -75,6 +75,7 @@ final class AppModel: ObservableObject {
         routing = Store.routing
         subscriptionUpdateHours = Store.subscriptionUpdateHours
         vpn.onError = { [weak self] message in self?.show("Ошибка подключения: \(message)") }
+        _ = PhysicalNetwork.shared // starts watching the network before the first ping
         #if DEMO
         if Demo.on {
             config = Demo.config
@@ -352,20 +353,19 @@ final class AppModel: ObservableObject {
         Task { await measure(entry) }
     }
 
-    /** The core can't be interrupted: a started measurement reports even if its run was restarted. */
+    /**
+     * The core can't be interrupted: a started measurement reports even if its run was restarted.
+     * Always measured in the app: with the VPN on, the test's connections are bound to the phone's
+     * own network, past the tunnel (in the tunnel extension the tests would get it killed for memory).
+     */
     private func measure(_ entry: ServerEntry) async {
         measuring.insert(entry.key)
         defer { measuring.remove(entry.key) }
         let url = config.delayTestUrl
+        let interface = vpn.isActive ? PhysicalNetwork.shared.interfaceName : nil
         var ms: Int64?
-        if vpn.isConnected {
-            // The app's own connections go through the tunnel; the extension's ones go straight to the server.
-            if let data = await vpn.send(.ping(serverKey: entry.key, url: url, config: Store.config(for: entry.key))),
-               let answer = try? JSONDecoder().decode(TunnelPing.self, from: data) {
-                ms = answer.ms
-            }
-        } else if let raw = Store.config(for: entry.key) {
-            ms = await Task.detached(priority: .userInitiated) { Core.ping(config: raw, url: url) }.value
+        if let raw = Store.config(for: entry.key) {
+            ms = await Task.detached(priority: .userInitiated) { Core.ping(config: raw, url: url, interface: interface) }.value
         }
         pings[entry.key] = ms.map(Ping.ok) ?? .failed
     }

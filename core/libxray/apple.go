@@ -29,6 +29,52 @@ func Ping(configJSON string, testURL string, timeoutMs int32) int64 {
 	return ms
 }
 
+// PingVia is Ping with every connection of the test bound to the network interface iface ("en0" for
+// Wi-Fi, "pdp_ip0" for cellular). While the VPN is on, the app's own connections go into the tunnel
+// and a test from the app would measure the way through the current server; a socket bound to the
+// phone's own interface goes past the tunnel (iOS doesn't enforce a VPN's routes on such sockets
+// unless the VPN asks it to). Testing in the tunnel extension instead is not an option: every test
+// is a whole Xray instance, auto-select's one probes all its servers at once, and the extension is
+// killed at about 50 MB. Empty iface: plain Ping.
+func PingVia(configJSON string, testURL string, timeoutMs int32, iface string) int64 {
+	if iface != "" {
+		bound, err := bindInterface(configJSON, iface)
+		if err != nil {
+			return -1
+		}
+		configJSON = bound
+	}
+	return Ping(configJSON, testURL, timeoutMs)
+}
+
+// bindInterface sets streamSettings.sockopt.interface on every outbound of the config.
+func bindInterface(configJSON string, iface string) (string, error) {
+	cfg, err := parseConfig(configJSON)
+	if err != nil {
+		return "", err
+	}
+	outbounds, _ := cfg["outbounds"].([]any)
+	for _, o := range outbounds {
+		ob := asMap(o)
+		if ob == nil {
+			continue
+		}
+		stream := asMap(ob["streamSettings"])
+		if stream == nil {
+			stream = map[string]any{}
+			ob["streamSettings"] = stream
+		}
+		sockopt := asMap(stream["sockopt"])
+		if sockopt == nil {
+			sockopt = map[string]any{}
+			stream["sockopt"] = sockopt
+		}
+		sockopt["interface"] = iface
+	}
+	b, err := json.Marshal(cfg)
+	return string(b), err
+}
+
 // SetMemoryLimit keeps the Go heap within mb megabytes (when mb > 0) and sets the GC target
 // (when gcPercent > 0): the iOS Network Extension is killed at about 50 MB.
 func SetMemoryLimit(mb int32, gcPercent int32) {
