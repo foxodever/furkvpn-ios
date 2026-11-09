@@ -47,6 +47,14 @@ struct SettingsView: View {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     }
                 }
+                Section(header: Text("Диагностика")) {
+                    NavigationLink(destination: DiagnosticsView()) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Диагностика VPN")
+                            Text("Почему VPN не подключается").font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                }
                 Section(header: Text("Поддержка")) {
                     ForEach(model.config.support, id: \.self) { contact in
                         Button(contact.title) { openLink(contact.url) }
@@ -112,5 +120,33 @@ struct SettingsView: View {
         case UpdateInterval.manual: return "Только вручную"
         default: return (hours == 1 ? "Каждый " : "Каждые ") + Format.hours(hours)
         }
+    }
+}
+
+/** Where the VPN can break, mostly after re-signing the IPA: ids, the profile, the App Group, the last error. */
+private struct DiagnosticsView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var vpn: VPNController
+
+    var body: some View {
+        let rows = vpn.diagnostics
+        Form {
+            Section(footer: Text("Если ID расширения и профиля разные или нет App Group — так подписан IPA. Сервер всё равно передаётся при подключении.")) {
+                ForEach(rows, id: \.0) { row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.0).font(.caption).foregroundColor(.secondary)
+                        Text(row.1).font(.subheadline).textSelection(.enabled)
+                    }
+                }
+            }
+            Section {
+                Button("Скопировать") {
+                    UIPasteboard.general.string = rows.map { "\($0.0): \($0.1)" }.joined(separator: "\n")
+                    model.show("Скопировано")
+                }
+            }
+        }
+        .navigationTitle("Диагностика")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

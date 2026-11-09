@@ -6,17 +6,28 @@ import Foundation
  * settings when it starts or reloads.
  */
 enum Store {
-    static let groupId = "group.com.furkvpn.app"
+    /**
+     * The App Group this build is entitled to: ours, or the one a re-signing tool made from the
+     * new bundle id ("group.<app id>"). Nil without one: then the app and the extension can't share
+     * files, and the extension gets what it needs with the start (TunnelPayload) instead.
+     */
+    static let groupId: String? = {
+        var candidates = ["group.com.furkvpn.app"]
+        if var id = Bundle.main.bundleIdentifier {
+            if id.hasSuffix(".tunnel") { id.removeLast(".tunnel".count) }
+            candidates.append("group." + id)
+        }
+        return candidates.first { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) != nil }
+    }()
 
     static let container: URL = {
-        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupId) { return url }
-        // Without the App Group entitlement (an unsigned build) the app and the extension can't share files.
+        if let groupId, let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupId) { return url }
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
 
-    static let defaults: UserDefaults = UserDefaults(suiteName: groupId) ?? .standard
+    static let defaults: UserDefaults = groupId.flatMap { UserDefaults(suiteName: $0) } ?? .standard
 
     private static let subscriptionFile = container.appendingPathComponent("subscription.json")
     private static let configsFile = container.appendingPathComponent("subscription_configs.json")

@@ -25,6 +25,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /** "LAN directly" the tunnel's routes were set up with; a change needs new network settings. */
     private var routesLanDirect = true
     private var serverKey: String?
+    /** The server and settings the core runs with. */
+    private var payload: TunnelPayload?
     private var totalUp: Int64 = 0
     private var totalDown: Int64 = 0
 
@@ -48,9 +50,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let longSleep: TimeInterval = 5 * 60
     private static let autoBestMaxAge: TimeInterval = 10 * 60
 
-    private struct TunnelError: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
+    /** An NSError with the message, so the app gets it through fetchLastDisconnectError. */
+    private static func failure(_ message: String) -> NSError {
+        NSError(domain: "com.furkvpn.tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    /**
+     * What to run: sent by the app with the start; otherwise (Shortcuts, the system's VPN switch) the
+     * shared files when this build has an App Group, or what the app saved in the VPN profile.
+     */
+    private func startPayload(_ options: [String: NSObject]?) -> TunnelPayload? {
+        if let sent = TunnelPayload.decode(options?[TunnelPayload.key] as? Data) { return sent }
+        if Store.groupId != nil, let shared = TunnelPayload.fromStore() { return shared }
+        let saved = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[TunnelPayload.key] as? Data
+        return TunnelPayload.decode(saved)
     }
 
     // MARK: Lifecycle
@@ -59,7 +72,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // The extension may use about 50 MB; the Go runtime has to collect garbage before that.
         LibxraySetMemoryLimit(32, 50)
         Store.setTunnelError(nil)
-        let lanDirect = Self.lanDirect
+        guard let payload = startPayload(options) else {
+            let error = Self.failure("Нет данных сервера: откройте FurkVPN и подключитесь из приложения")
+            Store.setTunnelError(error.localizedDescription)
+            completionHandler(error)
+            return
+        }
+        self.payload = payload
+        let lanDirect = Self.lanDirect(payload.routing)
         routesLanDirect = lanDirect
         let settings = Self.networkSettings(lanDirect: lanDirect)
         setTunnelNetworkSettings(settings) { [weak self] error in
@@ -71,7 +91,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             self.queue.async {
                 do {
-                    guard let fd = Self.findTunnelDescriptor() else { throw TunnelError(message: "no tunnel descriptor") }
+                    guard let fd = Self.findTunnelDescriptor() else { throw Self.failure("Не найден дескриптор туннеля") }
                     self.tunFd = fd
                     try self.startCore()
                     self.startWatchers()
@@ -79,7 +99,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 } catch {
                     os_log("start failed: %{public}@", log: self.log, type: .error, error.localizedDescription)
                     Store.setTunnelError(error.localizedDescription)
-                    completionHandler(error)
+                    completionHandler(Self.failure(error.localizedDescription))
                 }
             }
         }
@@ -109,9 +129,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: Core
 
     /** Settings → Routing → "Локальная сеть напрямую" (on by default). */
-    private static var lanDirect: Bool {
-        let routing = Store.routing
-        return routing.enabled && routing.lanDirect
+    private static func lanDirect(_ routing: RoutingSettings) -> Bool {
+        routing.enabled && routing.lanDirect
     }
 
     /**
@@ -158,20 +177,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /** Must run on [queue]. */
     private func startCore() throws {
-        guard let info = Store.loadSubscription(), let server = Store.selectedEntry(in: info) else {
-            throw TunnelError(message: "В подписке нет серверов.")
-        }
-        guard let raw = Store.config(for: server.key) else { throw TunnelError(message: "В подписке нет серверов.") }
+        guard let payload else { throw Self.failure("Нет данных сервера") }
         let fallback = autoBest.flatMap { best in
-            best.serverKey == server.key && Date().timeIntervalSince(best.at) < Self.autoBestMaxAge ? best.tag : nil
+            best.serverKey == payload.serverKey && Date().timeIntervalSince(best.at) < Self.autoBestMaxAge ? best.tag : nil
         }
-        let config = try Core.buildTunnelConfig(raw: raw, options: .init(routing: Store.routing, fallback: fallback))
+        let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(routing: payload.routing, fallback: fallback))
         if running { stopCore() }
         let error = LibxrayStartTunnel(config, tunFd)
-        if !error.isEmpty { throw TunnelError(message: error) }
+        if !error.isEmpty { throw Self.failure(error) }
         running = true
-        serverKey = server.key
-        os_log("core started: %{public}@", log: log, server.displayName)
+        serverKey = payload.serverKey
+        os_log("core started: %{public}@", log: log, payload.serverName)
     }
 
     /** Must run on [queue]. Keeps what the core has counted. */
@@ -293,20 +309,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 if self.running { self.sampleTraffic() }
                 completionHandler?(try? JSONEncoder().encode(TunnelStats(up: self.totalUp, down: self.totalDown)))
             }
-        case let .ping(serverKey, url):
+        case let .ping(serverKey, url, config):
             pingQueue.async {
                 self.pingSlots.wait()
                 defer { self.pingSlots.signal() }
-                let ms = Store.config(for: serverKey).flatMap { Core.ping(config: $0, url: url) }
+                let ms = (config ?? Store.config(for: serverKey)).flatMap { Core.ping(config: $0, url: url) }
                 completionHandler?(try? JSONEncoder().encode(TunnelPing(ms: ms)))
             }
-        case .reload:
+        case let .reload(sent):
             queue.async {
                 guard self.running else {
                     completionHandler?(Data())
                     return
                 }
-                let lanDirect = Self.lanDirect
+                if let next = sent ?? (Store.groupId != nil ? TunnelPayload.fromStore() : nil) { self.payload = next }
+                let lanDirect = Self.lanDirect(self.payload?.routing ?? RoutingSettings())
                 guard lanDirect != self.routesLanDirect else {
                     self.restartCore("settings changed")
                     completionHandler?(Data())

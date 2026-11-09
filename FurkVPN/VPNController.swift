@@ -1,6 +1,27 @@
 import Foundation
 import NetworkExtension
 
+/**
+ * The packet tunnel extension inside this app. Its bundle id is read from the app itself: tools that
+ * re-sign an IPA with another certificate often give the app and the extension new ids, and a profile
+ * pointing at the old one fails right after "connecting".
+ */
+enum TunnelExtension {
+    static let bundleId: String? = {
+        guard let plugins = Bundle.main.builtInPlugInsURL,
+              let items = try? FileManager.default.contentsOfDirectory(at: plugins, includingPropertiesForKeys: nil) else { return nil }
+        for url in items where url.pathExtension == "appex" {
+            guard let bundle = Bundle(url: url),
+                  let ext = bundle.object(forInfoDictionaryKey: "NSExtension") as? [String: Any],
+                  ext["NSExtensionPointIdentifier"] as? String == "com.apple.networkextension.packet-tunnel" else { continue }
+            return bundle.bundleIdentifier
+        }
+        return nil
+    }()
+
+    static var id: String { bundleId ?? (Bundle.main.bundleIdentifier ?? "com.furkvpn.app") + ".tunnel" }
+}
+
 /** The system VPN profile of FurkVPN and its tunnel: connect, disconnect, status, messages to the extension. */
 @MainActor
 final class VPNController: ObservableObject {
@@ -17,7 +38,8 @@ final class VPNController: ObservableObject {
     private var observer: NSObjectProtocol?
     /** A server or settings change while connecting: the start may have read the old ones. */
     private var reloadWhenConnected = false
-    static let tunnelBundleId = "com.furkvpn.app.tunnel"
+    /** Why the last connection ended, as iOS tells it (Settings → Диагностика). */
+    @Published private(set) var lastError: String?
 
     init() {
         observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] note in
@@ -34,8 +56,11 @@ final class VPNController: ObservableObject {
     }
 
     private func load() async {
+        // Only this app's profiles come back; one made by an earlier build may point at an old extension id
+        // (preparedManager fixes that on the next connect).
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-        manager = managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == Self.tunnelBundleId }
+        manager = managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == TunnelExtension.id }
+            ?? managers.first
         if let connection = manager?.connection { update(connection) }
     }
 
@@ -48,21 +73,47 @@ final class VPNController: ObservableObject {
         case .disconnecting: state = .stopping
         default: state = .idle
         }
-        if state == .idle, previous == .connecting, let message = Store.tunnelError(since: startedAt) {
-            onError?(message)
+        if state == .idle, previous == .connecting || previous == .stopping, Date().timeIntervalSince(startedAt) < 60 {
+            reportStartFailure(connection)
         }
         if case .connected = state, reloadWhenConnected {
             reloadWhenConnected = false
-            Task { _ = await send(.reload) }
+            Task { _ = await send(.reload(TunnelPayload.fromStore())) }
         }
         if state == .idle { reloadWhenConnected = false }
     }
 
+    /**
+     * The tunnel stopped right after a start: the extension's message (shared files) or, from iOS 16,
+     * what iOS says (it also carries the extension's error when there is no shared App Group).
+     */
+    private func reportStartFailure(_ connection: NEVPNConnection) {
+        let started = startedAt
+        startedAt = .distantPast
+        if let message = Store.tunnelError(since: started) {
+            lastError = message
+            onError?(message)
+            return
+        }
+        guard #available(iOS 16.0, *) else { return }
+        connection.fetchLastDisconnectError { error in
+            guard let error = error as NSError? else { return }
+            let underlying = (error.userInfo[NSUnderlyingErrorKey] as? NSError)?.localizedDescription
+            let message = [error.localizedDescription, underlying].compactMap { $0 }.joined(separator: " — ")
+            Task { @MainActor in
+                self.lastError = message
+                self.onError?(message)
+            }
+        }
+    }
+
     /** Creates the VPN profile on first use: iOS asks the user to allow it. */
-    private func preparedManager() async throws -> NETunnelProviderManager {
+    private func preparedManager(_ payload: TunnelPayload?) async throws -> NETunnelProviderManager {
         let manager = self.manager ?? NETunnelProviderManager()
         let proto = (manager.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
-        proto.providerBundleIdentifier = Self.tunnelBundleId
+        proto.providerBundleIdentifier = TunnelExtension.id
+        // For starts without the app (Shortcuts, the VPN switch in Settings) when there is no shared App Group.
+        if let payload { proto.providerConfiguration = [TunnelPayload.key: payload.encoded()] }
         proto.serverAddress = "FurkVPN"
         manager.protocolConfiguration = proto
         manager.localizedDescription = "FurkVPN"
@@ -76,11 +127,16 @@ final class VPNController: ObservableObject {
 
     func connect() async {
         do {
-            let manager = try await preparedManager()
+            let payload = TunnelPayload.fromStore()
+            let manager = try await preparedManager(payload)
             startedAt = Date()
+            lastError = nil
             Store.setTunnelError(nil)
             state = .connecting
-            try manager.connection.startVPNTunnel()
+            // The server's config goes with the start: the extension needs no shared files.
+            var options: [String: NSObject] = [:]
+            if let payload { options[TunnelPayload.key] = payload.encoded() as NSData }
+            try manager.connection.startVPNTunnel(options: options)
         } catch {
             state = .idle
             let nsError = error as NSError
@@ -133,7 +189,33 @@ final class VPNController: ObservableObject {
             reloadWhenConnected = true
             return
         }
-        _ = await send(.reload)
+        _ = await send(.reload(TunnelPayload.fromStore()))
+    }
+
+    // MARK: Diagnostics
+
+    /** What Settings → Диагностика shows: where the VPN can break on a re-signed build. */
+    var diagnostics: [(String, String)] {
+        let proto = manager?.protocolConfiguration as? NETunnelProviderProtocol
+        let status: String
+        switch manager?.connection.status {
+        case nil: status = "профиля нет — создаётся первым подключением"
+        case .invalid?: status = "профиль недействителен"
+        case .disconnected?: status = "отключён"
+        case .connecting?: status = "подключается"
+        case .connected?: status = "подключён"
+        case .reasserting?: status = "переподключается"
+        case .disconnecting?: status = "отключается"
+        default: status = "неизвестно"
+        }
+        return [
+            ("Приложение", Bundle.main.bundleIdentifier ?? "—"),
+            ("Расширение VPN", TunnelExtension.bundleId ?? "не найдено в приложении"),
+            ("Профиль указывает на", proto?.providerBundleIdentifier ?? "—"),
+            ("Профиль VPN", status + (manager?.isEnabled == false ? ", выключен" : "")),
+            ("App Group", Store.groupId ?? "нет — сервер передаётся при подключении"),
+            ("Последняя ошибка", lastError ?? Store.tunnelError(since: .distantPast) ?? "—"),
+        ]
     }
 
     /** For Shortcuts and Siri: connected or connecting turns off, otherwise on. */

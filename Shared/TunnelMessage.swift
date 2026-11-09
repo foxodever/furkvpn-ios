@@ -5,9 +5,9 @@ enum TunnelMessage: Codable {
     /** Traffic counted since the tunnel started. */
     case stats
     /** Delay through one server, measured by the extension: its sockets bypass the tunnel. */
-    case ping(serverKey: String, url: String)
+    case ping(serverKey: String, url: String, config: String?)
     /** The selected server or the settings changed: start the core again with them. */
-    case reload
+    case reload(TunnelPayload?)
 
     func encoded() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }
 
@@ -22,4 +22,31 @@ struct TunnelStats: Codable {
 struct TunnelPing: Codable {
     /** Milliseconds, or nil when the server did not answer. */
     var ms: Int64?
+}
+
+/**
+ * What the extension needs to run: the selected server's raw config and the routing settings.
+ * The app sends it with the start (and keeps it in the VPN profile), so the tunnel works even when
+ * a re-signed build has no shared App Group; with one, the extension can also read the files.
+ */
+struct TunnelPayload: Codable {
+    var serverKey: String
+    var serverName: String
+    var config: String
+    var routing: RoutingSettings
+
+    static let key = "payload"
+
+    /** The selected server, from the files of this process (or the shared ones). */
+    static func fromStore() -> TunnelPayload? {
+        guard let info = Store.loadSubscription(), let server = Store.selectedEntry(in: info),
+              let raw = Store.config(for: server.key) else { return nil }
+        return TunnelPayload(serverKey: server.key, serverName: server.displayName, config: raw, routing: Store.routing)
+    }
+
+    func encoded() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }
+
+    static func decode(_ data: Data?) -> TunnelPayload? {
+        data.flatMap { try? JSONDecoder().decode(TunnelPayload.self, from: $0) }
+    }
 }

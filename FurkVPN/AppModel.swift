@@ -360,7 +360,7 @@ final class AppModel: ObservableObject {
         var ms: Int64?
         if vpn.isConnected {
             // The app's own connections go through the tunnel; the extension's ones go straight to the server.
-            if let data = await vpn.send(.ping(serverKey: entry.key, url: url)),
+            if let data = await vpn.send(.ping(serverKey: entry.key, url: url, config: Store.config(for: entry.key))),
                let answer = try? JSONDecoder().decode(TunnelPing.self, from: data) {
                 ms = answer.ms
             }

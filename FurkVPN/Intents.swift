@@ -16,7 +16,7 @@ private enum TunnelSwitch {
         let all = try await NETunnelProviderManager.loadAllFromPreferences()
         // The profile is created by the first connection in the app (iOS asks for permission there).
         guard Store.loadSubscription() != nil,
-              let manager = all.first(where: { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.furkvpn.app.tunnel" })
+              let manager = all.first(where: { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == TunnelExtension.id })
         else { throw IntentFailure(localizedStringResource: "Сначала подключитесь в приложении FurkVPN") }
         return manager
     }
@@ -32,7 +32,9 @@ private enum TunnelSwitch {
             try await manager.loadFromPreferences()
         }
         Store.setTunnelError(nil)
-        try manager.connection.startVPNTunnel()
+        var options: [String: NSObject] = [:]
+        if let payload = TunnelPayload.fromStore() { options[TunnelPayload.key] = payload.encoded() as NSData }
+        try manager.connection.startVPNTunnel(options: options)
     }
 }
 
