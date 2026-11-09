@@ -28,6 +28,9 @@ type tunnelOptions struct {
 	Routing  *routingOptions `json:"routing"`
 	// Tag of the auto-select server that was best a moment ago, to start the balancer with.
 	Fallback string `json:"fallback"`
+	// The phone's own network interface ("en0", "pdp_ip0"): every connection of the core is bound
+	// to it, so none of them can loop back into the tunnel the core itself serves.
+	Interface string `json:"interface"`
 }
 
 // routingOptions are Settings → Routing; missing switches take the app's defaults.
@@ -100,9 +103,14 @@ func buildTunnelConfig(source map[string]any, opts tunnelOptions) map[string]any
 			break
 		}
 	}
+	tunSettings := map[string]any{"name": "tun0", "mtu": tunMTU}
+	if opts.Interface != "" {
+		// Binds what the core dials outside the outbounds' own settings too (Xray's dialer controller).
+		tunSettings["autoOutboundsInterface"] = opts.Interface
+	}
 	out["inbounds"] = []any{map[string]any{
 		"tag": tunTag, "protocol": "tun", "port": 0,
-		"settings": map[string]any{"name": "tun0", "mtu": tunMTU},
+		"settings": tunSettings,
 		"sniffing": sniffing,
 	}}
 
@@ -170,6 +178,9 @@ func buildTunnelConfig(source map[string]any, opts tunnelOptions) map[string]any
 		}
 	}
 	out["routing"] = routing
+	if opts.Interface != "" {
+		bindOutbounds(outbounds, opts.Interface)
+	}
 	out["outbounds"] = outbounds
 
 	// Servers are reached over IPv4; AAAA answers would make apps try IPv6 destinations that the

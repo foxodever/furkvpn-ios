@@ -62,6 +62,13 @@ func bindInterface(configJSON string, iface string) (string, error) {
 		return "", err
 	}
 	outbounds, _ := cfg["outbounds"].([]any)
+	bindOutbounds(outbounds, iface)
+	b, err := json.Marshal(cfg)
+	return string(b), err
+}
+
+// bindOutbounds sets streamSettings.sockopt.interface on every outbound (Xray binds with IP_BOUND_IF).
+func bindOutbounds(outbounds []any, iface string) {
 	for _, o := range outbounds {
 		ob := asMap(o)
 		if ob == nil {
@@ -79,8 +86,6 @@ func bindInterface(configJSON string, iface string) (string, error) {
 		}
 		sockopt["interface"] = iface
 	}
-	b, err := json.Marshal(cfg)
-	return string(b), err
 }
 
 // SetMemoryLimit keeps the Go heap within mb megabytes (when mb > 0) and sets the GC target

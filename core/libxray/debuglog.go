@@ -3,6 +3,7 @@ package libxray
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"runtime"
@@ -122,7 +123,7 @@ var debugUpload struct {
 // StopDebugUpload, from a goroutine of its own: the report keeps coming even when the Swift side
 // of the extension is stuck, and stops when the process dies. Temporary, for finding out why the
 // VPN carries no traffic on the iPhone; the user turns it on in Settings → Диагностика.
-func StartDebugUpload(url string) {
+func StartDebugUpload(url string, iface string) {
 	debugUpload.mu.Lock()
 	defer debugUpload.mu.Unlock()
 	if debugUpload.stop != nil || url == "" {
@@ -132,6 +133,11 @@ func StartDebugUpload(url string) {
 	debugUpload.stop = stop
 	go func() {
 		client := &http.Client{Timeout: 5 * time.Second}
+		if iface != "" {
+			// Bound to the phone's own network, so the report gets out even when the tunnel is broken.
+			dialer := &net.Dialer{Timeout: 5 * time.Second, Control: dialControlBound(iface)}
+			client.Transport = &http.Transport{DialContext: dialer.DialContext}
+		}
 		tick := time.NewTicker(5 * time.Second)
 		defer tick.Stop()
 		for {

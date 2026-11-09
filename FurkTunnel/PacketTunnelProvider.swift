@@ -29,6 +29,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var totalDown: Int64 = 0
 
     private var monitor: NWPathMonitor?
+    /** "en0" or "pdp_ip0": what the core's connections are bound to. */
+    private var physicalInterface: String?
     private var startedAt = Date()
     /** What iOS still allows this process, for the debug report. */
     private var memoryTimer: DispatchSourceTimer?
@@ -81,7 +83,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         self.payload = payload
         startedAt = Date()
-        if let url = payload.debugUpload { LibxrayStartDebugUpload(url) }
+        // The phone's network first: the core binds its connections to it.
+        startPathMonitor()
+        if let url = payload.debugUpload { LibxrayStartDebugUpload(url, physicalInterface ?? "") }
         startMemoryReports()
         LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
         let lanDirect = Self.lanDirect(payload.routing)
@@ -211,7 +215,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             best.serverKey == payload.serverKey && Date().timeIntervalSince(best.at) < Self.autoBestMaxAge ? best.tag : nil
         }
         // Warnings too: the app's diagnostics screen shows them (DebugLog).
-        let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(logLevel: "warning", routing: payload.routing, fallback: fallback))
+        let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(
+            logLevel: "warning", routing: payload.routing, fallback: fallback, interface: physicalInterface))
+        LibxrayDebugNote("bound to \(physicalInterface ?? "nothing")")
         if running { stopCore() }
         LibxrayDebugNote("core starting")
         let error = LibxrayStartTunnel(config, tunFd)
@@ -254,14 +260,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: Watchers
 
-    private func startWatchers() {
+    /**
+     * Watches the phone's own network; returns once the first path is known (or after a second):
+     * the core is started bound to that interface.
+     */
+    private func startPathMonitor() {
         let monitor = NWPathMonitor()
-        // The tunnel itself is an "other" interface; only the phone's own network matters.
+        let first = DispatchSemaphore(value: 0)
         // Called on [queue].
-        monitor.pathUpdateHandler = { [weak self] path in self?.networkChanged(path) }
+        monitor.pathUpdateHandler = { [weak self] path in
+            self?.networkChanged(path)
+            first.signal()
+        }
         monitor.start(queue: queue)
         self.monitor = monitor
+        _ = first.wait(timeout: .now() + 1)
+    }
 
+    private func startWatchers() {
         let timer = DispatchSource.makeTimerSource(queue: healthQueue)
         timer.schedule(deadline: .now() + .seconds(Self.autoCheckInterval), repeating: .seconds(Self.autoCheckInterval))
         timer.setEventHandler { [weak self] in self?.checkAutoSelectNow(afterSleep: false) }
@@ -284,13 +300,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      */
     private func networkChanged(_ path: Network.NWPath) {
         pathSatisfied = path.status == .satisfied
-        // Wi-Fi ↔ cellular matters; the order or names of the interfaces don't.
+        // The tunnel itself is an "other" interface; the list is in the order of preference.
         let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
+        let interfaces: [NWInterface] = path.availableInterfaces.filter { physical.contains($0.type) }
+        let previousInterface = physicalInterface
+        physicalInterface = interfaces.first?.name
+        if physicalInterface != previousInterface, let url = payload?.debugUpload {
+            LibxrayStopDebugUpload()
+            LibxrayStartDebugUpload(url, physicalInterface ?? "")
+        }
+        // Wi-Fi ↔ cellular, or another interface to bind the core to; not the order of the rest.
         var names: Set<String> = []
-        for interface in path.availableInterfaces where physical.contains(interface.type) {
+        for interface in interfaces {
             names.insert("\(interface.type)")
         }
-        let key: String = path.status == .satisfied ? names.sorted().joined(separator: ",") : ""
+        let key: String = path.status == .satisfied ? names.sorted().joined(separator: ",") + " @" + (physicalInterface ?? "") : ""
         LibxrayDebugNote("network: \(key.isEmpty ? "none" : key)")
         // The tunnel coming up makes iOS report the path again: that is the same network.
         guard let previous = pathKey, Date().timeIntervalSince(startedAt) > 10 else {

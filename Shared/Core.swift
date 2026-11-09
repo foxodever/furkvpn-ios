@@ -99,6 +99,8 @@ enum Core {
         var logLevel = "error"
         var routing: RoutingSettings
         var fallback: String?
+        /** The phone's own interface: the core's connections are bound to it, never into its own tunnel. */
+        var interface: String?
     }
 
     /** The server's config with Xray's TUN inbound, the user's rules and traffic counters. */

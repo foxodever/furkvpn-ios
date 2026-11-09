@@ -42,7 +42,7 @@ func TestDebugUploadPostsReports(t *testing.T) {
 	}))
 	defer srv.Close()
 	DebugNote("tunnel started")
-	StartDebugUpload(srv.URL)
+	StartDebugUpload(srv.URL, "")
 	defer StopDebugUpload()
 	select {
 	case report := <-got:

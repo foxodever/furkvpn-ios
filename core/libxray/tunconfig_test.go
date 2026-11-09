@@ -198,3 +198,31 @@ func TestTunnelConfigStarts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTunnelBoundToThePhonesInterface(t *testing.T) {
+	raw := `{"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443,
+	  "users":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","encryption":"none"}]}]},
+	  "streamSettings":{"security":"tls","tlsSettings":{"serverName":"x.example"}}},
+	  {"tag":"direct","protocol":"freedom"}]}`
+	out, err := BuildTunnelConfig(raw, `{"interface":"pdp_ip0"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustParse(t, out)
+	tun := asMap(asMap(cfg["inbounds"].([]any)[0])["settings"])
+	if tun["autoOutboundsInterface"] != "pdp_ip0" {
+		t.Errorf("tun settings = %v", tun)
+	}
+	for _, o := range cfg["outbounds"].([]any) {
+		if got := asMap(asMap(asMap(o)["streamSettings"])["sockopt"])["interface"]; got != "pdp_ip0" {
+			t.Errorf("%v: interface %v", asMap(o)["tag"], got)
+		}
+	}
+	if err := ValidateConfig(out); err != nil {
+		t.Errorf("Xray refuses it: %v", err)
+	}
+	plain, _ := BuildTunnelConfig(raw, `{}`)
+	if strings.Contains(plain, "autoOutboundsInterface") || strings.Contains(plain, `"interface"`) {
+		t.Error("bound without an interface")
+	}
+}
