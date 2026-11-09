@@ -6,6 +6,8 @@ enum TunnelMessage: Codable {
     case stats
     /** The selected server or the settings changed: start the core again with them. */
     case reload(TunnelPayload?)
+    /** The extension's state, a test request through its core and the core's recent log (Settings → Диагностика). */
+    case debug(url: String)
 
     func encoded() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }
 
@@ -15,6 +17,17 @@ enum TunnelMessage: Codable {
 struct TunnelStats: Codable {
     var up: Int64
     var down: Int64
+}
+
+struct TunnelDebug: Codable {
+    var running: Bool
+    var server: String?
+    var descriptor: Int32
+    var interface: String?
+    var up: Int64
+    var down: Int64
+    var check: String
+    var log: String
 }
 
 

@@ -17,6 +17,14 @@ func StartTunnel(configJSON string, tunFd int32) string {
 	if err := Start(configJSON, tunFd); err != nil {
 		return err.Error()
 	}
+	mu.Lock()
+	inst := instance
+	mu.Unlock()
+	if inst != nil {
+		createMu.Lock()
+		installDebugLog(inst)
+		createMu.Unlock()
+	}
 	return ""
 }
 

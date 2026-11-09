@@ -159,6 +159,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         return [24, 16, 8, 0].map { String((bits >> UInt32($0)) & 0xFF) }.joined(separator: ".")
     }
 
+    /** "utun4" for the descriptor, nil when it is not a utun. */
+    private static func interfaceName(_ fd: Int32) -> String? {
+        var name = [CChar](repeating: 0, count: Int(IFNAMSIZ))
+        var length = socklen_t(name.count)
+        guard fd >= 0, getsockopt(fd, 2, 2, &name, &length) == 0 else { return nil }
+        return String(cString: name)
+    }
+
     /** The utun descriptor NetworkExtension opened for this tunnel (the way WireGuard and Xray's docs find it). */
     private static func findTunnelDescriptor() -> Int32? {
         var name = [CChar](repeating: 0, count: Int(IFNAMSIZ))
@@ -178,7 +186,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let fallback = autoBest.flatMap { best in
             best.serverKey == payload.serverKey && Date().timeIntervalSince(best.at) < Self.autoBestMaxAge ? best.tag : nil
         }
-        let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(routing: payload.routing, fallback: fallback))
+        // Warnings too: the app's diagnostics screen shows them (DebugLog).
+        let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(logLevel: "warning", routing: payload.routing, fallback: fallback))
         if running { stopCore() }
         let error = LibxrayStartTunnel(config, tunFd)
         if !error.isEmpty { throw Self.failure(error) }
@@ -305,6 +314,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             queue.async {
                 if self.running { self.sampleTraffic() }
                 completionHandler?(try? JSONEncoder().encode(TunnelStats(up: self.totalUp, down: self.totalDown)))
+            }
+        case let .debug(url):
+            // The test request takes seconds: not on the core's queue.
+            healthQueue.async {
+                let check = LibxrayCheckRunning(url, 5000)
+                self.queue.async {
+                    if self.running { self.sampleTraffic() }
+                    let debug = TunnelDebug(running: self.running, server: self.payload?.serverName, descriptor: self.tunFd,
+                                            interface: Self.interfaceName(self.tunFd), up: self.totalUp, down: self.totalDown,
+                                            check: check, log: LibxrayDebugLog())
+                    completionHandler?(try? JSONEncoder().encode(debug))
+                }
             }
         case let .reload(sent):
             queue.async {

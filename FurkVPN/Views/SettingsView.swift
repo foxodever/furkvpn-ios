@@ -127,6 +127,26 @@ struct SettingsView: View {
 private struct DiagnosticsView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vpn: VPNController
+    /** What the running extension says about itself; nil when it doesn't run or answer. */
+    @State private var core: String?
+    @State private var loading = false
+
+    private func loadCore() async {
+        loading = true
+        defer { loading = false }
+        guard let data = await vpn.send(.debug(url: model.config.delayTestUrl)), let d = try? JSONDecoder().decode(TunnelDebug.self, from: data) else {
+            core = vpn.isConnected ? "Расширение не ответило" : nil
+            return
+        }
+        core = """
+        Ядро: \(d.running ? "работает" : "остановлено") · \(d.server ?? "—")
+        Туннель: дескриптор \(d.descriptor) (\(d.interface ?? "не utun"))
+        Из туннеля ↑ \(d.up) байт · в туннель ↓ \(d.down) байт
+        Запрос через ядро из расширения: \(d.check)
+
+        \(d.log)
+        """
+    }
 
     var body: some View {
         let rows = vpn.diagnostics
@@ -139,13 +159,20 @@ private struct DiagnosticsView: View {
                     }
                 }
             }
+            Section(header: Text("Расширение VPN"), footer: Text(core == nil ? "Подключите VPN и нажмите «Обновить»: расширение покажет, читает ли ядро пакеты туннеля, и последние ошибки и соединения." : "")) {
+                if let core {
+                    Text(core).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
+                }
+                Button(loading ? "Загрузка…" : "Обновить") { Task { await loadCore() } }.disabled(loading)
+            }
             Section {
-                Button("Скопировать") {
-                    UIPasteboard.general.string = rows.map { "\($0.0): \($0.1)" }.joined(separator: "\n")
+                Button("Скопировать всё") {
+                    UIPasteboard.general.string = rows.map { "\($0.0): \($0.1)" }.joined(separator: "\n") + "\n\n" + (core ?? "")
                     model.show("Скопировано")
                 }
             }
         }
+        .task { await loadCore() }
         .navigationTitle("Диагностика")
         .navigationBarTitleDisplayMode(.inline)
     }
