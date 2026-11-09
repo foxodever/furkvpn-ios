@@ -75,6 +75,18 @@ final class AppModel: ObservableObject {
         routing = Store.routing
         subscriptionUpdateHours = Store.subscriptionUpdateHours
         vpn.onError = { [weak self] message in self?.show("Ошибка подключения: \(message)") }
+        #if DEMO
+        if Demo.on {
+            config = Demo.config
+            configFetchedAt = Date()
+            resumedBefore = true
+            lastResume = Date().addingTimeInterval(3600)
+            subscription = Demo.welcome ? nil : Demo.subscription
+            account = Demo.welcome ? nil : Demo.account
+            pings = Demo.pings
+            selectedKey = Demo.subscription.servers.first?.key
+        }
+        #endif
     }
 
     var selectedServer: ServerEntry? {

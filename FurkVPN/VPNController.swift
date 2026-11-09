@@ -24,6 +24,12 @@ final class VPNController: ObservableObject {
             guard let connection = note.object as? NEVPNConnection else { return }
             Task { @MainActor in self?.update(connection) }
         }
+        #if DEMO
+        if Demo.on {
+            if Demo.connected { state = .connected(since: Date().addingTimeInterval(-754)) }
+            return
+        }
+        #endif
         Task { await load() }
     }
 
@@ -111,6 +117,9 @@ final class VPNController: ObservableObject {
     }
 
     func stats() async -> TunnelStats? {
+        #if DEMO
+        if Demo.on { return Demo.stats }
+        #endif
         guard let data = await send(.stats) else { return nil }
         return try? JSONDecoder().decode(TunnelStats.self, from: data)
     }

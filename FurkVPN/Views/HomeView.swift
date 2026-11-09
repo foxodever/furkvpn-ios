@@ -74,6 +74,12 @@ struct HomeView: View {
             }
         }
         .navigationViewStyle(.stack)
+        #if DEMO
+        .onAppear {
+            showServers = Demo.servers
+            showSettings = Demo.settings
+        }
+        #endif
         .sheet(isPresented: $showServers) {
             ServersView().environmentObject(model).environmentObject(vpn).resizableSheet()
         }
