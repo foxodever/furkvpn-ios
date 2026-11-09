@@ -285,8 +285,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func networkChanged(_ path: Network.NWPath) {
         pathSatisfied = path.status == .satisfied
         // Wi-Fi ↔ cellular matters; the order or names of the interfaces don't.
-        let types = Set(path.availableInterfaces.map(\.type).filter { $0 == .wifi || $0 == .cellular || $0 == .wiredEthernet })
-        let key = path.status == .satisfied ? types.map { "\($0)" }.sorted().joined(separator: ",") : ""
+        let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
+        var names: Set<String> = []
+        for interface in path.availableInterfaces where physical.contains(interface.type) {
+            names.insert("\(interface.type)")
+        }
+        let key: String = path.status == .satisfied ? names.sorted().joined(separator: ",") : ""
         LibxrayDebugNote("network: \(key.isEmpty ? "none" : key)")
         // The tunnel coming up makes iOS report the path again: that is the same network.
         guard let previous = pathKey, Date().timeIntervalSince(startedAt) > 10 else {
