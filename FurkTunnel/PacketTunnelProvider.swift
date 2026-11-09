@@ -31,6 +31,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var monitor: NWPathMonitor?
     /** "en0" or "pdp_ip0": what the core's connections are bound to. */
     private var physicalInterface: String?
+    /** False when only unbound sockets reach the network (the probe before the start). */
+    private var bindCore = true
+    private var probeResult = ""
     private var startedAt = Date()
     /** What iOS still allows this process, for the debug report. */
     private var memoryTimer: DispatchSourceTimer?
@@ -104,6 +107,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     guard let fd = Self.findTunnelDescriptor() else { throw Self.failure("Не найден дескриптор туннеля") }
                     self.tunFd = fd
                     LibxrayDebugNote("tunnel fd \(fd) \(Self.interfaceName(fd) ?? "?")")
+                    self.probeNetwork()
                     try self.startCore()
                     self.startWatchers()
                     LibxrayDebugNote("started")
@@ -216,9 +220,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             best.serverKey == payload.serverKey && Date().timeIntervalSince(best.at) < Self.autoBestMaxAge ? best.tag : nil
         }
         // Warnings too: the app's diagnostics screen shows them (DebugLog).
+        let interface = bindCore ? physicalInterface : nil
         let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(
-            logLevel: "warning", routing: payload.routing, fallback: fallback, interface: physicalInterface))
-        LibxrayDebugNote("bound to \(physicalInterface ?? "nothing")")
+            logLevel: "warning", routing: payload.routing, fallback: fallback, interface: interface))
+        LibxrayDebugNote("bound to \(interface ?? "nothing")")
         if running { stopCore() }
         LibxrayDebugNote("core starting")
         let error = LibxrayStartTunnel(config, tunFd)
@@ -265,6 +270,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * Watches the phone's own network; returns once the first path is known (or after a second):
      * the core is started bound to that interface.
      */
+    /**
+     * Before the core reads the tunnel: does a DNS query get out with the socket bound to the phone's
+     * interface, or only without? The core is bound only if binding works (or nothing does).
+     */
+    private func probeNetwork() {
+        probeResult = LibxrayProbeNetwork(physicalInterface ?? "")
+        LibxrayDebugNote("network probe \(probeResult)")
+        guard let result = try? JSONDecoder().decode([String: String].self, from: Data(probeResult.utf8)) else { return }
+        let boundOK = result["bound"]?.hasPrefix("ok") == true
+        let unboundOK = result["unbound"]?.hasPrefix("ok") == true
+        bindCore = boundOK || !unboundOK
+    }
+
     private func startPathMonitor() {
         let monitor = NWPathMonitor()
         let first = DispatchSemaphore(value: 0)
@@ -376,7 +394,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 if self.running { self.sampleTraffic() }
                 let summary = "Отчёт расширения: ядро \(self.running ? "работает" : "остановлено"), "
                     + "интерфейс \(self.physicalInterface ?? "—"), из туннеля ↑\(self.totalUp) ↓\(self.totalDown) байт, "
-                    + "сообщений от приложения \(self.messagesReceived).\n\(steps)\nОшибки ядра:\n"
+                    + "сообщений от приложения \(self.messagesReceived).\n"
+                    + "Проверка сети до запуска ядра (bound — через \(self.physicalInterface ?? "—"), unbound — без привязки): \(self.probeResult); "
+                    + "ядро \(self.bindCore ? "привязано" : "не привязано").\n\(steps)\nОшибки ядра:\n"
                     + String(LibxrayDebugErrors(12).suffix(2500))
                 LibxrayDebugNote("self-test done")
                 self.cancelTunnelWithError(Self.failure(summary))
