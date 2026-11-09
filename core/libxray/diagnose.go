@@ -2,6 +2,7 @@ package libxray
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
@@ -133,4 +134,33 @@ func DebugErrors(lines int) string {
 		list = list[len(list)-lines:]
 	}
 	return strings.Join(list, "\n")
+}
+
+// ProbeNetwork asks 77.88.8.8 over TCP for a name, once with the socket bound to iface and once
+// without, before the core reads the tunnel. Only a real answer counts: an unbound socket of a
+// process iOS doesn't keep out of the tunnel would go into it and get none. JSON:
+// {"bound":"ok 41 мс" or the error, "unbound":...}.
+func ProbeNetwork(iface string) string {
+	probe := func(bind string) string {
+		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			d := net.Dialer{}
+			if bind != "" {
+				d.Control = dialControlBound(bind)
+			}
+			return d.DialContext(ctx, "tcp", "77.88.8.8:53")
+		}}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		started := time.Now()
+		if _, err := r.LookupIP(ctx, "ip4", "ya.ru"); err != nil {
+			return err.Error()
+		}
+		return fmt.Sprintf("ok %d мс", time.Since(started).Milliseconds())
+	}
+	result := map[string]string{"unbound": probe("")}
+	if iface != "" {
+		result["bound"] = probe(iface)
+	}
+	b, _ := json.Marshal(result)
+	return string(b)
 }
