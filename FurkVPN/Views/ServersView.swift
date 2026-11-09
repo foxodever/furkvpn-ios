@@ -41,10 +41,12 @@ struct ServersView: View {
             List {
                 if !filters.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            chip("Все", selected: filter == nil) { filter = nil }
-                            ForEach(filters, id: \.self) { f in
-                                chip("\(f.emoji) \(f.title)", selected: filter == f.emoji) { filter = f.emoji }
+                        GlassGroup(spacing: 8) {
+                            HStack(spacing: 8) {
+                                chip("Все", selected: filter == nil) { filter = nil }
+                                ForEach(filters, id: \.self) { f in
+                                    chip("\(f.emoji) \(f.title)", selected: filter == f.emoji) { filter = f.emoji }
+                                }
                             }
                         }
                         .padding(.vertical, 4)
@@ -68,12 +70,10 @@ struct ServersView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
                 ToolbarItemGroup(placement: .primaryAction) {
-                    if model.pinging {
-                        ProgressView()
-                    } else {
-                        Button { model.testPings() } label: { Image(systemName: "bolt.horizontal.circle") }
-                            .accessibilityLabel("Проверить пинг")
-                    }
+                    if model.pinging { ProgressView() }
+                    // Stays enabled while pinging: pressing it again starts over.
+                    Button { model.testPings() } label: { Image(systemName: "bolt.horizontal.circle") }
+                        .accessibilityLabel("Проверить пинг")
                 }
             }
             .task {
@@ -110,7 +110,8 @@ struct ServersView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
                 .foregroundColor(selected ? .onAccent : .primary)
-                .background(selected ? Color.accentColor : Color.cardHigh, in: Capsule())
+                .contentShape(Capsule())
+                .glassSurface(Capsule(), tint: selected ? .accentColor : nil, interactive: true, fallback: .cardHigh)
         }
         .buttonStyle(.plain)
     }

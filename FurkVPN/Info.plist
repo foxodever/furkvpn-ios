@@ -31,6 +31,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Камера нужна, чтобы отсканировать QR-код с ключом или с экрана телевизора</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>

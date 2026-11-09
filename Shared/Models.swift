@@ -36,6 +36,9 @@ struct SubscriptionInfo: Codable {
 
     var selectable: [ServerEntry] { servers.filter { $0.kind != .separator } }
 
+    /** [fetchedAt] in whole milliseconds: tags the config list saved with this server list. */
+    var fetchedAtMs: Int64 { Int64((fetchedAt.timeIntervalSince1970 * 1000).rounded()) }
+
     /** Remnawave short UUID: the last path segment of the key. */
     var shortId: String? { URL(string: url)?.pathComponents.last { $0 != "/" } }
 }
@@ -101,10 +104,20 @@ struct ServerFilter: Codable, Hashable {
 /** Host names without "https://". */
 struct SiteConfig: Codable {
     var domain: String = "furkvpn.info"
-    var apiDomain: String = "api.furkvpn.info"
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        domain = (try? c.decodeIfPresent(String.self, forKey: .domain)) ?? SiteConfig().domain
+    }
 
     /** "Войти через сайт": the account page with the button that adds the key to the app. */
     var installUrl: String { "https://\(domain)/dashboard/install" }
+
+    /** Settings → О приложении. */
+    var privacyUrl: String { "https://\(domain)/privacy" }
+    var termsUrl: String { "https://\(domain)/terms" }
 
     /** "Продлить" / "Купить тариф": the site's payment page for the subscription (its short UUID). */
     func renewalUrl(_ subscriptionId: String) -> String {
@@ -114,8 +127,9 @@ struct SiteConfig: Codable {
 
     /** "https://furkvpn.info/" becomes "furkvpn.info"; anything that is not a host name falls back to the default. */
     func sanitized() -> SiteConfig {
-        let defaults = SiteConfig()
-        return SiteConfig(domain: Self.hostName(domain) ?? defaults.domain, apiDomain: Self.hostName(apiDomain) ?? defaults.apiDomain)
+        var site = SiteConfig()
+        if let host = Self.hostName(domain) { site.domain = host }
+        return site
     }
 
     private static func hostName(_ value: String) -> String? {

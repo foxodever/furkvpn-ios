@@ -110,6 +110,29 @@ enum Core {
         return config
     }
 
+    struct Route: Decodable {
+        var address: String
+        var prefix: Int
+    }
+
+    /** Routes of the tunnel: everything, or without the local network and multicast when [lanDirect]. */
+    static func tunnelRoutes(lanDirect: Bool) -> (ipv4: [Route], ipv6: [Route]) {
+        struct Answer: Decodable {
+            var ipv4: [Route]
+            var ipv6: [Route]
+        }
+        guard let a = try? JSONDecoder().decode(Answer.self, from: Data(LibxrayTunnelRoutes(lanDirect).utf8)) else {
+            return ([Route(address: "0.0.0.0", prefix: 0)], [Route(address: "::", prefix: 0)])
+        }
+        return (a.ipv4, a.ipv6)
+    }
+
+    /** The TV's QR code "https://furkapp.net/tv/ABC123" → "ABC123"; nil for anything else. */
+    static func tvCode(_ text: String?) -> String? {
+        let code = LibxrayTvCodeFromLink(text ?? "")
+        return code.isEmpty ? nil : code
+    }
+
     /** Real delay through the server in milliseconds, or nil when it is unreachable. */
     static func ping(config: String, url: String, timeoutMs: Int32 = 5000) -> Int64? {
         let ms = LibxrayPing(config, url, timeoutMs)

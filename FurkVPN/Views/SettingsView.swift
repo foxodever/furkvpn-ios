@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var confirmLogout = false
     @State private var changeKey = false
     @State private var manual = false
+    @State private var scanningTv = false
 
     var body: some View {
         NavigationView {
@@ -28,6 +29,12 @@ struct SettingsView: View {
                     }
                     Button("Сменить ключ") { changeKey = true }
                     Button("Удалить ключ", role: .destructive) { confirmLogout = true }
+                }
+                // The TV's QR code is scanned with this phone's camera.
+                if CameraInfo.available {
+                    Section(footer: Text("Отсканируйте QR-код с экрана FurkVPN на телевизоре")) {
+                        Button { scanningTv = true } label: { Label("Подключить телевизор", systemImage: "tv") }
+                    }
                 }
                 Section(header: Text("VPN")) {
                     NavigationLink(destination: RoutingView()) {
@@ -56,6 +63,8 @@ struct SettingsView: View {
                         Spacer()
                         Text(Core.xrayVersion).foregroundColor(.secondary)
                     }
+                    Button("Политика конфиденциальности") { openLink(model.config.site.privacyUrl) }
+                    Button("Пользовательское соглашение") { openLink(model.config.site.termsUrl) }
                 }
             }
             .navigationTitle("Настройки")
@@ -78,6 +87,11 @@ struct SettingsView: View {
                 Button("Отмена", role: .cancel) {}
             }
             .sheet(isPresented: $manual) { ManualKeySheet { model.submitKey($0) } }
+            .fullScreenCover(isPresented: $scanningTv) {
+                ScannerView(title: "Подключить телевизор", hint: "Наведите камеру телефона на QR-код на экране телевизора") {
+                    model.submitKey($0)
+                }
+            }
             .keyAlerts()
             .toast($model.toast)
         }

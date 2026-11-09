@@ -36,11 +36,11 @@ struct ToastOverlay: ViewModifier {
             if let text {
                 Text(text)
                     .font(.subheadline)
-                    .foregroundColor(.onAccent)
+                    .foregroundColor(toastText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
-                    .background(Color.accentColor, in: Capsule())
+                    .glassSurface(Capsule(), fallback: .accentColor)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -48,6 +48,14 @@ struct ToastOverlay: ViewModifier {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: text)
+    }
+
+    /** Dark text on the glass of iOS 26, light text on the accent capsule before. */
+    private var toastText: Color {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) { return .primary }
+        #endif
+        return .onAccent
     }
 }
 
@@ -262,6 +270,19 @@ struct KeyAlerts: ViewModifier {
             } message: {
                 Text("Текущий ключ будет заменён новым.")
             }
+            .alert("Отправить ключ на телевизор?", isPresented: Binding(get: { model.tvSend != nil }, set: { if !$0 { model.tvSend = nil } })) {
+                Button("Отправить") { model.confirmTvSend() }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Телевизор с кодом \(Self.display(model.tvSend ?? "")) подключится к вашей подписке FurkVPN.")
+            }
+    }
+}
+
+extension KeyAlerts {
+    /** "ABC123" → "ABC 123": easier to compare with the TV screen. */
+    static func display(_ code: String) -> String {
+        code.count == 6 ? String(code.prefix(3)) + " " + String(code.suffix(3)) : code
     }
 }
 

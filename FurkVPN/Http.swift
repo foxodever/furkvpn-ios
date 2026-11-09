@@ -46,7 +46,8 @@ enum Http {
 
     /**
      * Device id for the panel's device limit (x-hwid). Kept in the keychain, so a reinstall of the
-     * app is still the same device.
+     * app is still the same device; "this device only", so a new phone restored from a backup is a
+     * new device.
      */
     static let deviceId: String = {
         let query: [String: Any] = [
@@ -62,7 +63,7 @@ enum Http {
         let id = UUID().uuidString.lowercased()
         var add = query
         add[kSecValueData as String] = Data(id.utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
         return id
     }()
@@ -73,6 +74,16 @@ enum Http {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return (data, http)
+    }
+
+    /** POST of a JSON body; the HTTP status (the TV pairing API answers with it). */
+    static func post(_ url: URL, body: [String: Any]) async throws -> Int {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (_, response) = try await session.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode ?? 0
     }
 
     static func postJSON(_ url: URL, body: [String: Any]) async throws -> Data {

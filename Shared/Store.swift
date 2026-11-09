@@ -48,9 +48,15 @@ enum Store {
 
     static func loadSubscription() -> SubscriptionInfo? { read(SubscriptionInfo.self, subscriptionFile) }
 
+    /** Server configs and the [SubscriptionInfo.fetchedAtMs] of the list they belong to. */
+    private struct SavedConfigs: Codable {
+        var fetchedAt: Int64
+        var configs: [String]
+    }
+
     /** [configs][i] is the raw Xray config of [info.servers][i]. */
     static func saveSubscription(_ info: SubscriptionInfo, configs: [String]) {
-        write(configs, configsFile)
+        write(SavedConfigs(fetchedAt: info.fetchedAtMs, configs: configs), configsFile)
         write(info, subscriptionFile)
     }
 
@@ -61,11 +67,20 @@ enum Store {
         selectedServer = nil
     }
 
-    /** Raw Xray config of a server, as served by the panel. */
+    /**
+     * Raw Xray config of a server, as served by the panel. Servers are matched to configs by position,
+     * so a config list from another download (the files are written one after the other, and the
+     * extension may read in between) gives nil rather than another server's config.
+     */
     static func config(for serverKey: String) -> String? {
-        guard let info = loadSubscription(), let index = info.servers.firstIndex(where: { $0.key == serverKey }),
-              let configs = read([String].self, configsFile), index < configs.count else { return nil }
-        return configs[index]
+        for _ in 0..<2 {
+            guard let info = loadSubscription(), let index = info.servers.firstIndex(where: { $0.key == serverKey }) else { return nil }
+            // Before 1.1.0: a bare array.
+            if let configs = read([String].self, configsFile) { return index < configs.count ? configs[index] : nil }
+            guard let saved = read(SavedConfigs.self, configsFile) else { return nil }
+            if saved.fetchedAt == info.fetchedAtMs { return index < saved.configs.count ? saved.configs[index] : nil }
+        }
+        return nil
     }
 
     /** The selected server, falling back to the first selectable one. */

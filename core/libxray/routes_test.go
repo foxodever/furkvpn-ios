@@ -37,6 +37,13 @@ func TestWhatPeopleTypeBecomesARule(t *testing.T) {
 		"1.2.3.4/33":                    "",
 		"not a domain!":                 "",
 		"regexp:(":                      "",
+		// Fine for Java, but Xray (Go RE2) would refuse to start with them.
+		`regexp:^(?!ads).*\.com$`: "",
+		"regexp:(?<=x)y":          "",
+		`regexp:(a)\1`:            "",
+		"regexp:a*+":              "",
+		`regexp:^.*\.ru$`:         `regexp:^.*\.ru$`,
+		"010.1.1.1":               "",
 	}
 	for in, want := range cases {
 		if got := normalizeRoute(in); got != want {

@@ -292,6 +292,10 @@ func isIPv4(value string) bool {
 		if n, _ := strconv.Atoi(p); n > 255 {
 			return false
 		}
+		// "010" is rejected by Go's parser (Xray): no leading zeros.
+		if len(p) > 1 && p[0] == '0' {
+			return false
+		}
 	}
 	return true
 }

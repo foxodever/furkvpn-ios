@@ -79,3 +79,13 @@ func TestWildcardMatching(t *testing.T) {
 		t.Error("no fallback to the default hosts")
 	}
 }
+
+func TestKeyAfterOtherLinksInAMessage(t *testing.T) {
+	message := "Бот: https://t.me/FurkVPNbot\nСайт: furkvpn.info\nВаш ключ: https://sub.furkvpn.com/abcDEF123456XYZ0"
+	if got := keyURLOf(t, message); got != "https://sub.furkvpn.com/abcDEF123456XYZ0" {
+		t.Errorf("key = %s", got)
+	}
+	if got := parseKey("https://t.me/FurkVPNbot https://example.com/x", testHosts).Result; got != "foreign" {
+		t.Errorf("only foreign links: %s", got)
+	}
+}

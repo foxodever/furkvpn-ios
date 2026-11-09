@@ -61,10 +61,25 @@ func parseKey(input string, allowed []string) parsedKey {
 	if text == "" {
 		return parsedKey{Result: "empty"}
 	}
-	candidate := findKeyURL(text)
-	if candidate == "" {
+	links := findKeyURLs(text)
+	if len(links) == 0 {
 		return parsedKey{Result: "notALink"}
 	}
+	// A message may have other links before the key (t.me, the site): the first key wins.
+	var first parsedKey
+	for i, link := range links {
+		result := parseKeyLink(link, allowed)
+		if result.Result == "ok" {
+			return result
+		}
+		if i == 0 {
+			first = result
+		}
+	}
+	return first
+}
+
+func parseKeyLink(candidate string, allowed []string) parsedKey {
 	for range 3 {
 		inner := unwrapKey(candidate)
 		if inner == "" {
@@ -130,15 +145,19 @@ func hostAllowed(host string, patterns []string) bool {
 	return false
 }
 
-func findKeyURL(text string) string {
+func findKeyURLs(text string) []string {
 	const trailing = ".,)]!?;"
-	if m := keyURL.FindString(text); m != "" {
-		return strings.TrimRight(m, trailing)
+	var links []string
+	for _, m := range keyURL.FindAllString(text, -1) {
+		links = append(links, strings.TrimRight(m, trailing))
 	}
-	if m := keyBare.FindString(text); m != "" {
-		return "https://" + strings.TrimRight(m, trailing)
+	if len(links) > 0 {
+		return links
 	}
-	return ""
+	for _, m := range keyBare.FindAllString(text, -1) {
+		links = append(links, "https://"+strings.TrimRight(m, trailing))
+	}
+	return links
 }
 
 // unwrapKey extracts the inner key from import wrappers, or returns "" when link is not a wrapper.

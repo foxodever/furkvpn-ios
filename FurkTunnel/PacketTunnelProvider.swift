@@ -22,6 +22,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var tunFd: Int32 = -1
     private var running = false
+    /** "LAN directly" the tunnel's routes were set up with; a change needs new network settings. */
+    private var routesLanDirect = true
     private var serverKey: String?
     private var totalUp: Int64 = 0
     private var totalDown: Int64 = 0
@@ -57,7 +59,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // The extension may use about 50 MB; the Go runtime has to collect garbage before that.
         LibxraySetMemoryLimit(32, 50)
         Store.setTunnelError(nil)
-        let settings = Self.networkSettings()
+        let lanDirect = Self.lanDirect
+        routesLanDirect = lanDirect
+        let settings = Self.networkSettings(lanDirect: lanDirect)
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
             if let error {
@@ -104,20 +108,39 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: Core
 
-    private static func networkSettings() -> NEPacketTunnelNetworkSettings {
+    /** Settings → Routing → "Локальная сеть напрямую" (on by default). */
+    private static var lanDirect: Bool {
+        let routing = Store.routing
+        return routing.enabled && routing.lanDirect
+    }
+
+    /**
+     * With "LAN directly" the local network, link-local and multicast stay out of the routes, not only
+     * go direct in Xray: device discovery (AirPlay, Chromecast, printers) works as without the VPN.
+     */
+    private static func networkSettings(lanDirect: Bool) -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: mtu)
+        let routes = Core.tunnelRoutes(lanDirect: lanDirect)
         let ipv4 = NEIPv4Settings(addresses: [tunIPv4], subnetMasks: ["255.255.255.252"])
-        ipv4.includedRoutes = [NEIPv4Route.default()]
+        // The DNS address is in 172.16/12, which "LAN directly" leaves out.
+        ipv4.includedRoutes = routes.ipv4.map { NEIPv4Route(destinationAddress: $0.address, subnetMask: Self.mask($0.prefix)) }
+            + [NEIPv4Route(destinationAddress: tunDNS, subnetMask: "255.255.255.255")]
         settings.ipv4Settings = ipv4
         // IPv6 goes into the tunnel too, so it doesn't leak past the VPN; the core answers DNS with IPv4 only.
         let ipv6 = NEIPv6Settings(addresses: [tunIPv6], networkPrefixLengths: [126])
-        ipv6.includedRoutes = [NEIPv6Route.default()]
+        ipv6.includedRoutes = routes.ipv6.map { NEIPv6Route(destinationAddress: $0.address, networkPrefixLength: NSNumber(value: $0.prefix)) }
         settings.ipv6Settings = ipv6
         let dns = NEDNSSettings(servers: [tunDNS])
         dns.matchDomains = [""]
         settings.dnsSettings = dns
         return settings
+    }
+
+    /** "255.255.0.0" for 16. */
+    private static func mask(_ prefix: Int) -> String {
+        let bits: UInt32 = prefix == 0 ? 0 : UInt32.max << UInt32(32 - prefix)
+        return [24, 16, 8, 0].map { String((bits >> UInt32($0)) & 0xFF) }.joined(separator: ".")
     }
 
     /** The utun descriptor NetworkExtension opened for this tunnel (the way WireGuard and Xray's docs find it). */
@@ -279,8 +302,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         case .reload:
             queue.async {
-                if self.running { self.restartCore("settings changed") }
-                completionHandler?(Data())
+                guard self.running else {
+                    completionHandler?(Data())
+                    return
+                }
+                let lanDirect = Self.lanDirect
+                guard lanDirect != self.routesLanDirect else {
+                    self.restartCore("settings changed")
+                    completionHandler?(Data())
+                    return
+                }
+                // "LAN directly" changed: new routes for the tunnel, then the core on them.
+                self.routesLanDirect = lanDirect
+                self.reasserting = true
+                self.setTunnelNetworkSettings(Self.networkSettings(lanDirect: lanDirect)) { _ in
+                    self.queue.async {
+                        if let fd = Self.findTunnelDescriptor() { self.tunFd = fd }
+                        self.restartCore("routes changed")
+                        completionHandler?(Data())
+                    }
+                }
             }
         }
     }

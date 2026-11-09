@@ -49,8 +49,10 @@ struct HomeView: View {
                                 Image(systemName: "chevron.right").foregroundColor(.secondary)
                             }
                             .foregroundColor(.primary)
-                            .card()
+                            .padding(16)
+                            .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
                         }
+                        .buttonStyle(.plain)
                         .padding(.top, 8)
                     }
                 }
@@ -59,7 +61,7 @@ struct HomeView: View {
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
             }
-            .background(Color.brandBackground.ignoresSafeArea())
+            .background(BrandBackdrop())
             .refreshable { model.refreshSubscription(showMessage: true) }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -73,7 +75,7 @@ struct HomeView: View {
         }
         .navigationViewStyle(.stack)
         .sheet(isPresented: $showServers) {
-            ServersView().environmentObject(model).environmentObject(vpn)
+            ServersView().environmentObject(model).environmentObject(vpn).resizableSheet()
         }
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model).environmentObject(vpn)
@@ -149,7 +151,8 @@ private struct ConnectButton: View {
                 }
                 .foregroundColor(connected ? .onAccent : .primary)
                 .frame(width: 176, height: 176)
-                .background(Circle().fill(connected ? Color.accentColor : Color.cardHigh))
+                .contentShape(Circle())
+                .glassSurface(Circle(), tint: connected ? .accentColor : nil, interactive: true, fallback: .cardHigh)
                 .shadow(color: .black.opacity(connected ? 0.25 : 0), radius: 8, y: 4)
             }
             .buttonStyle(.plain)
@@ -223,7 +226,10 @@ private struct ServerCard: View {
                 PingLabel(ping: ping, kind: server?.kind)
                 Image(systemName: "chevron.right").foregroundColor(.secondary)
             }
-            .card()
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
         }
         .buttonStyle(.plain)
     }
@@ -268,7 +274,7 @@ private struct AccountCard: View {
                 }
                 if isFree || endsSoon {
                     Button(isFree ? "Купить тариф" : "Продлить") { openLink(model.renewUrl?.absoluteString) }
-                        .buttonStyle(.borderedProminent)
+                        .glassButtonStyle(prominent: true)
                         .padding(.top, 8)
                 }
             }
@@ -300,11 +306,13 @@ private struct QuickActions: View {
     var onSupport: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(model.config.links, id: \.self) { link in
-                action(title(link), icon: link.type == "bot" ? "paperplane.fill" : "globe") { openLink(link.url) }
+        GlassGroup(spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(model.config.links, id: \.self) { link in
+                    action(title(link), icon: link.type == "bot" ? "paperplane.fill" : "globe") { openLink(link.url) }
+                }
+                action("Поддержка", icon: "questionmark.bubble.fill", onSupport)
             }
-            action("Поддержка", icon: "questionmark.bubble.fill", onSupport)
         }
     }
 
@@ -326,7 +334,8 @@ private struct QuickActions: View {
             .foregroundColor(.primary)
             .frame(maxWidth: .infinity, minHeight: 64)
             .padding(.vertical, 12)
-            .background(Color.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
         }
         .buttonStyle(.plain)
     }

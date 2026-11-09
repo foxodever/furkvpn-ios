@@ -26,7 +26,10 @@ jobs:
           cache-dependency-path: core/go.sum
       - name: Tools
         run: |
-          xcodebuild -version
+          # The newest Xcode 26 if the image has one: its SDK has Liquid Glass.
+          newest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          { ls -d /Applications/Xcode*.app; xcode-select -p; xcodebuild -version; } | tee xcode.txt
           brew install xcodegen
       - name: Core cache
         id: core
@@ -54,7 +57,7 @@ jobs:
         run: |
           mkdir out
           cp build/FurkVPN-*.ipa out/ 2>/dev/null || true
-          cp core.log out/ 2>/dev/null || true
+          cp core.log xcode.txt out/ 2>/dev/null || true
           if [ -f build.log ]; then
             grep -E 'error:|error |BUILD (SUCCEEDED|FAILED)|\*\* ' build.log | head -300 > out/errors.txt || true
             tail -n 300 build.log > out/build-tail.log

@@ -15,6 +15,8 @@ final class VPNController: ObservableObject {
 
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
+    /** A server or settings change while connecting: the start may have read the old ones. */
+    private var reloadWhenConnected = false
     static let tunnelBundleId = "com.furkvpn.app.tunnel"
 
     init() {
@@ -43,6 +45,11 @@ final class VPNController: ObservableObject {
         if state == .idle, previous == .connecting, let message = Store.tunnelError(since: startedAt) {
             onError?(message)
         }
+        if case .connected = state, reloadWhenConnected {
+            reloadWhenConnected = false
+            Task { _ = await send(.reload) }
+        }
+        if state == .idle { reloadWhenConnected = false }
     }
 
     /** Creates the VPN profile on first use: iOS asks the user to allow it. */
@@ -88,6 +95,9 @@ final class VPNController: ObservableObject {
         return false
     }
 
+    /** Connected or on the way there: a change of server or settings has to reach the tunnel. */
+    var isActive: Bool { isConnected || state == .connecting }
+
     /** Sends a message to the running extension; nil when it is not running or did not answer. */
     func send(_ message: TunnelMessage) async -> Data? {
         guard let session = manager?.connection as? NETunnelProviderSession, session.status == .connected else { return nil }
@@ -105,8 +115,20 @@ final class VPNController: ObservableObject {
         return try? JSONDecoder().decode(TunnelStats.self, from: data)
     }
 
-    /** Asks the extension to start the core again with the selected server and settings. */
+    /**
+     * Asks the extension to start the core again with the selected server and settings. While still
+     * connecting it waits for the connection: the start may have read the previous server.
+     */
     func reload() async {
+        if state == .connecting {
+            reloadWhenConnected = true
+            return
+        }
         _ = await send(.reload)
+    }
+
+    /** For Shortcuts and Siri: connected or connecting turns off, otherwise on. */
+    func toggle() async {
+        if isActive { disconnect() } else { await connect() }
     }
 }
