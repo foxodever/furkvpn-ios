@@ -14,6 +14,7 @@ import (
 // Auto-select's health state starts afresh with every core.
 func StartTunnel(configJSON string, tunFd int32) string {
 	autoSelect.reset()
+	rememberRunningConfig(configJSON)
 	if err := Start(configJSON, tunFd); err != nil {
 		return err.Error()
 	}

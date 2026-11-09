@@ -371,13 +371,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard payload?.debugUpload != nil else { return }
         healthQueue.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self else { return }
-            let check = LibxrayCheckRunning("https://www.gstatic.com/generate_204", 5000)
+            let steps = LibxrayDiagnoseRunning("https://www.gstatic.com/generate_204", self.physicalInterface ?? "")
             self.queue.async {
                 if self.running { self.sampleTraffic() }
                 let summary = "Отчёт расширения: ядро \(self.running ? "работает" : "остановлено"), "
                     + "интерфейс \(self.physicalInterface ?? "—"), из туннеля ↑\(self.totalUp) ↓\(self.totalDown) байт, "
-                    + "сообщений от приложения \(self.messagesReceived), запрос через ядро: \(check). "
-                    + String(LibxrayDebugLog().suffix(1500))
+                    + "сообщений от приложения \(self.messagesReceived).\n\(steps)\nОшибки ядра:\n"
+                    + String(LibxrayDebugErrors(12).suffix(2500))
                 LibxrayDebugNote("self-test done")
                 self.cancelTunnelWithError(Self.failure(summary))
             }

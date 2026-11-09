@@ -42,6 +42,8 @@ final class VPNController: ObservableObject {
     @Published private(set) var lastError: String?
     /** Disconnect pressed in the app: no error to look for. */
     private var userStopped = false
+    /** A reload the extension didn't get: connect again once the tunnel is down. */
+    private var connectWhenStopped = false
 
     init() {
         observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] note in
@@ -78,6 +80,10 @@ final class VPNController: ObservableObject {
         if state == .idle, previous != .idle {
             if !userStopped { reportDisconnect(connection) }
             userStopped = false
+            if connectWhenStopped {
+                connectWhenStopped = false
+                Task { await connect() }
+            }
         }
         if case .connected = state, reloadWhenConnected {
             reloadWhenConnected = false
@@ -211,7 +217,12 @@ final class VPNController: ObservableObject {
             reloadWhenConnected = true
             return
         }
-        _ = await send(.reload(TunnelPayload.fromStore()))
+        if await send(.reload(TunnelPayload.fromStore())) == nil, isConnected {
+            // Some re-signed builds never get app messages through to the extension: reconnect instead.
+            connectWhenStopped = true
+            userStopped = true
+            manager?.connection.stopVPNTunnel()
+        }
     }
 
     // MARK: Diagnostics
