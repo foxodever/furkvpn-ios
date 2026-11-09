@@ -41,6 +41,8 @@ struct TunnelPayload: Codable {
     var serverName: String
     var config: String
     var routing: RoutingSettings
+    /** Where the extension posts its state every 5 s (Settings → Диагностика; temporary, for debugging). */
+    var debugUpload: String?
 
     static let key = "payload"
 
@@ -48,7 +50,8 @@ struct TunnelPayload: Codable {
     static func fromStore() -> TunnelPayload? {
         guard let info = Store.loadSubscription(), let server = Store.selectedEntry(in: info),
               let raw = Store.config(for: server.key) else { return nil }
-        return TunnelPayload(serverKey: server.key, serverName: server.displayName, config: raw, routing: Store.routing)
+        return TunnelPayload(serverKey: server.key, serverName: server.displayName, config: raw, routing: Store.routing,
+                             debugUpload: Store.debugUpload ? Store.debugUploadURL : nil)
     }
 
     func encoded() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }

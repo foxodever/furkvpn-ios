@@ -2,6 +2,7 @@ import Foundation
 import Libxray
 import Network
 import NetworkExtension
+import os
 import os.log
 
 /**
@@ -28,6 +29,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var totalDown: Int64 = 0
 
     private var monitor: NWPathMonitor?
+    private var startedAt = Date()
+    /** What iOS still allows this process, for the debug report. */
+    private var memoryTimer: DispatchSourceTimer?
     private var pathKey: String?
     private var pathSatisfied = true
     private var networkWork: DispatchWorkItem?
@@ -76,12 +80,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         self.payload = payload
+        startedAt = Date()
+        if let url = payload.debugUpload { LibxrayStartDebugUpload(url) }
+        startMemoryReports()
+        LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
         let lanDirect = Self.lanDirect(payload.routing)
         routesLanDirect = lanDirect
         let settings = Self.networkSettings(lanDirect: lanDirect)
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
             if let error {
+                LibxrayDebugNote("network settings failed: \(error.localizedDescription)")
                 Store.setTunnelError(error.localizedDescription)
                 completionHandler(error)
                 return
@@ -90,10 +99,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 do {
                     guard let fd = Self.findTunnelDescriptor() else { throw Self.failure("Не найден дескриптор туннеля") }
                     self.tunFd = fd
+                    LibxrayDebugNote("tunnel fd \(fd) \(Self.interfaceName(fd) ?? "?")")
                     try self.startCore()
                     self.startWatchers()
+                    LibxrayDebugNote("started")
                     completionHandler(nil)
                 } catch {
+                    LibxrayDebugNote("start failed: \(error.localizedDescription)")
                     os_log("start failed: %{public}@", log: self.log, type: .error, error.localizedDescription)
                     Store.setTunnelError(error.localizedDescription)
                     completionHandler(Self.failure(error.localizedDescription))
@@ -103,11 +115,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        LibxrayDebugNote("stop requested, reason \(reason.rawValue)")
         queue.async {
             self.stopWatchers()
             self.stopCore()
+            LibxrayDebugNote("stopped")
+            LibxrayStopDebugUpload()
+            self.memoryTimer?.cancel()
             completionHandler()
         }
+    }
+
+    private func startMemoryReports() {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.furkvpn.tunnel.memory"))
+        timer.schedule(deadline: .now(), repeating: .seconds(5))
+        timer.setEventHandler { LibxrayDebugMemoryLeft(Int32(os_proc_available_memory() / 1_048_576)) }
+        timer.resume()
+        memoryTimer = timer
     }
 
     override func sleep(completionHandler: @escaping () -> Void) {
@@ -189,6 +213,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // Warnings too: the app's diagnostics screen shows them (DebugLog).
         let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(logLevel: "warning", routing: payload.routing, fallback: fallback))
         if running { stopCore() }
+        LibxrayDebugNote("core starting")
         let error = LibxrayStartTunnel(config, tunFd)
         if !error.isEmpty { throw Self.failure(error) }
         running = true
@@ -200,7 +225,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func stopCore() {
         guard running else { return }
         sampleTraffic()
+        LibxrayDebugNote("core stopping")
         _ = LibxrayStop(nil)
+        LibxrayDebugNote("core stopped")
         running = false
     }
 
@@ -208,6 +235,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func restartCore(_ why: String) {
         guard tunFd >= 0 else { return }
         os_log("restarting the core: %{public}@", log: log, why)
+        LibxrayDebugNote("restart: \(why)")
         reasserting = true
         do {
             try startCore()
@@ -256,9 +284,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      */
     private func networkChanged(_ path: Network.NWPath) {
         pathSatisfied = path.status == .satisfied
-        let interfaces = path.availableInterfaces.filter { $0.type != .other }
-        let key = path.status == .satisfied ? interfaces.map { "\($0.type):\($0.name)" }.joined(separator: ",") : ""
-        guard let previous = pathKey else {
+        // Wi-Fi ↔ cellular matters; the order or names of the interfaces don't.
+        let types = Set(path.availableInterfaces.map(\.type).filter { $0 == .wifi || $0 == .cellular || $0 == .wiredEthernet })
+        let key = path.status == .satisfied ? types.map { "\($0)" }.sorted().joined(separator: ",") : ""
+        LibxrayDebugNote("network: \(key.isEmpty ? "none" : key)")
+        // The tunnel coming up makes iOS report the path again: that is the same network.
+        guard let previous = pathKey, Date().timeIntervalSince(startedAt) > 10 else {
             pathKey = key // the network the tunnel was started on
             return
         }
@@ -306,9 +337,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         guard let message = TunnelMessage.decode(messageData) else {
+            LibxrayDebugNote("message not understood (\(messageData.count) bytes)")
             completionHandler?(nil)
             return
         }
+        LibxrayDebugNote("message \(message)".prefix(80).description)
         switch message {
         case .stats:
             queue.async {

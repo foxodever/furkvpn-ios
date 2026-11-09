@@ -177,6 +177,23 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /** Like [send], with why there was no answer (Settings → Диагностика). */
+    func sendExplained(_ message: TunnelMessage) async -> (Data?, String) {
+        guard let session = manager?.connection as? NETunnelProviderSession else { return (nil, "нет VPN-профиля") }
+        guard session.status == .connected else { return (nil, "VPN не подключён (статус \(session.status.rawValue))") }
+        let started = Date()
+        return await withCheckedContinuation { continuation in
+            do {
+                try session.sendProviderMessage(message.encoded()) { data in
+                    let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
+                    continuation.resume(returning: (data, data == nil ? "расширение ответило пустым через \(seconds) с" : ""))
+                }
+            } catch {
+                continuation.resume(returning: (nil, "не отправилось: \(error.localizedDescription)"))
+            }
+        }
+    }
+
     func stats() async -> TunnelStats? {
         #if DEMO
         if Demo.on { return Demo.stats }

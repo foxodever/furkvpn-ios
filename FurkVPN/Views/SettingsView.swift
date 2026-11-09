@@ -130,12 +130,14 @@ private struct DiagnosticsView: View {
     /** What the running extension says about itself; nil when it doesn't run or answer. */
     @State private var core: String?
     @State private var loading = false
+    @State private var debugUpload = Store.debugUpload
 
     private func loadCore() async {
         loading = true
         defer { loading = false }
-        guard let data = await vpn.send(.debug(url: model.config.delayTestUrl)), let d = try? JSONDecoder().decode(TunnelDebug.self, from: data) else {
-            core = vpn.isConnected ? "Расширение не ответило" : nil
+        let (data, why) = await vpn.sendExplained(.debug(url: model.config.delayTestUrl))
+        guard let data, let d = try? JSONDecoder().decode(TunnelDebug.self, from: data) else {
+            core = vpn.isConnected ? "Расширение не ответило: \(data == nil ? why : "непонятный ответ")" : nil
             return
         }
         core = """
@@ -164,6 +166,10 @@ private struct DiagnosticsView: View {
                     Text(core).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
                 }
                 Button(loading ? "Загрузка…" : "Обновить") { Task { await loadCore() } }.disabled(loading)
+            }
+            Section(footer: Text("Пока включено, расширение VPN раз в 5 секунд отправляет разработчику своё состояние, ошибки и порты соединений — без адресов сайтов. Включите, переподключите VPN, подождите полминуты и выключите.")) {
+                Toggle("Отправлять журнал расширения", isOn: $debugUpload)
+                    .onChange(of: debugUpload) { Store.debugUpload = $0 }
             }
             Section {
                 Button("Скопировать всё") {

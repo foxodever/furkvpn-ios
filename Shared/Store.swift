@@ -128,6 +128,15 @@ enum Store {
         set { defaults.set(newValue, forKey: "subscriptionUpdateHours") }
     }
 
+    /** Settings → Диагностика → send the extension's log to the developer (temporary, for debugging). */
+    static var debugUpload: Bool {
+        get { defaults.bool(forKey: "debugUpload") }
+        set { defaults.set(newValue, forKey: "debugUpload") }
+    }
+
+    /** A collector on the API server, only while the VPN on iPhones is being debugged. */
+    static let debugUploadURL = "http://54.36.51.149:18790/fv-dbg-7Qm2xK9p"
+
     /** The last error of the tunnel extension, for the app to show. */
     static func setTunnelError(_ message: String?) {
         if let message {
