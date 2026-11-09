@@ -107,6 +107,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     try self.startCore()
                     self.startWatchers()
                     LibxrayDebugNote("started")
+                    self.scheduleSelfTest()
                     completionHandler(nil)
                 } catch {
                     LibxrayDebugNote("start failed: \(error.localizedDescription)")
@@ -363,7 +364,31 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: Messages from the app
 
+    /** Debug mode (Settings → Диагностика): 15 s after the start the extension stops the VPN with a report
+     * as the error, which iOS hands to the app — a way out that needs neither shared files, nor messages,
+     * nor the network. No report while the VPN stays "connected" means the extension died or hangs. */
+    private func scheduleSelfTest() {
+        guard payload?.debugUpload != nil else { return }
+        healthQueue.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self else { return }
+            let check = LibxrayCheckRunning("https://www.gstatic.com/generate_204", 5000)
+            self.queue.async {
+                if self.running { self.sampleTraffic() }
+                let summary = "Отчёт расширения: ядро \(self.running ? "работает" : "остановлено"), "
+                    + "интерфейс \(self.physicalInterface ?? "—"), из туннеля ↑\(self.totalUp) ↓\(self.totalDown) байт, "
+                    + "сообщений от приложения \(self.messagesReceived), запрос через ядро: \(check). "
+                    + String(LibxrayDebugLog().suffix(1500))
+                LibxrayDebugNote("self-test done")
+                self.cancelTunnelWithError(Self.failure(summary))
+            }
+        }
+    }
+
+    /** App messages that reached this process (the report tells "not delivered" from "not answered"). */
+    private var messagesReceived = 0
+
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
+        queue.async { self.messagesReceived += 1 }
         guard let message = TunnelMessage.decode(messageData) else {
             LibxrayDebugNote("message not understood (\(messageData.count) bytes)")
             completionHandler?(nil)

@@ -216,6 +216,22 @@ final class VPNController: ObservableObject {
 
     // MARK: Diagnostics
 
+    /** Asks iOS again why the last connection ended (the app may have slept through the change). */
+    func refreshLastError() async {
+        guard #available(iOS 16.0, *), let connection = manager?.connection else { return }
+        let message: String? = await withCheckedContinuation { continuation in
+            connection.fetchLastDisconnectError { error in
+                guard let error = error as NSError? else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let underlying = (error.userInfo[NSUnderlyingErrorKey] as? NSError)?.localizedDescription
+                continuation.resume(returning: [error.localizedDescription, underlying].compactMap { $0 }.joined(separator: " — "))
+            }
+        }
+        if let message { lastError = message }
+    }
+
     /** What Settings → Диагностика shows: where the VPN can break on a re-signed build. */
     var diagnostics: [(String, String)] {
         let proto = manager?.protocolConfiguration as? NETunnelProviderProtocol

@@ -167,8 +167,8 @@ private struct DiagnosticsView: View {
                 }
                 Button(loading ? "Загрузка…" : "Обновить") { Task { await loadCore() } }.disabled(loading)
             }
-            Section(footer: Text("Пока включено, расширение VPN раз в 5 секунд отправляет разработчику своё состояние, ошибки и порты соединений — без адресов сайтов. Включите, переподключите VPN, подождите полминуты и выключите.")) {
-                Toggle("Отправлять журнал расширения", isOn: $debugUpload)
+            Section(footer: Text("Для отладки. Включите и подключите VPN: через 15 секунд он сам отключится и покажет отчёт расширения в «Последней ошибке» выше. Заодно расширение пробует отправить разработчику своё состояние, ошибки и порты соединений — без адресов сайтов. Потом выключите.")) {
+                Toggle("Режим отладки VPN", isOn: $debugUpload)
                     .onChange(of: debugUpload) { Store.debugUpload = $0 }
             }
             Section {
@@ -178,7 +178,10 @@ private struct DiagnosticsView: View {
                 }
             }
         }
-        .task { await loadCore() }
+        .task {
+            await vpn.refreshLastError()
+            await loadCore()
+        }
         .navigationTitle("Диагностика")
         .navigationBarTitleDisplayMode(.inline)
     }
