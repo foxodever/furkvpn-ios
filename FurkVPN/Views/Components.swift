@@ -27,6 +27,20 @@ extension View {
     func card(_ color: Color = .card) -> some View { modifier(CardBackground(color: color)) }
 }
 
+/**
+ * Two halves side by side when the window is wide enough for both: the unfolded iPhone Duo (its inner
+ * display is wider than tall and doesn't keep the app in portrait), an iPad. Chosen by the space the
+ * window has, not by the device: the Duo's halves, Split View and Slide Over give the narrow layout.
+ */
+enum WideLayout {
+    static let minWidth: CGFloat = 700
+    static let maxWidth: CGFloat = 1000
+    /** Between the halves; the halves are equal, so on the Duo the gap lies over the fold. */
+    static let gap: CGFloat = 40
+
+    static func fits(_ size: CGSize) -> Bool { size.width >= minWidth }
+}
+
 /** Short message at the bottom of the screen (the Android snackbar). */
 struct ToastOverlay: ViewModifier {
     @Binding var text: String?

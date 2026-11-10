@@ -13,7 +13,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    runs-on: macos-15
+    # Xcode 27 (iOS 27.1+ SDK): only apps built with it fill both displays of the iPhone Duo. The image
+    # also has the Duo simulator.
+    runs-on: xcode-27
     timeout-minutes: 60
     defaults:
       run:
@@ -26,8 +28,8 @@ jobs:
           cache-dependency-path: core/go.sum
       - name: Tools
         run: |
-          # The newest Xcode 26 if the image has one: its SDK has Liquid Glass.
-          newest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          # The newest Xcode 27 (not a beta): the iOS 27.1+ SDK for the Duo, Liquid Glass.
+          newest=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
           if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
           { ls -d /Applications/Xcode*.app; xcode-select -p; xcodebuild -version; } | tee xcode.txt
           brew install xcodegen
@@ -36,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: Frameworks/Libxray.xcframework
-          key: libxray-ios-sim-${{ hashFiles('core/**') }}
+          key: libxray-ios-sim-xcode27-${{ hashFiles('core/**') }}
       - name: Build Xray-core for iOS
         if: steps.core.outputs.cache-hit != 'true'
         working-directory: core
@@ -51,7 +53,7 @@ jobs:
       - name: Screenshots in the Simulator
         if: success() && contains(github.event.head_commit.message, '[shots]')
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: ./screenshots.sh 2>&1 | tail -n 60 | tee shots.log
       - uses: actions/upload-artifact@v4
         if: success()

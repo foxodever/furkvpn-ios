@@ -10,66 +10,42 @@ struct HomeView: View {
 
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(spacing: 0) {
-                    StatusHeader(state: vpn.state)
-                        .padding(.top, 12)
-                    Spacer().frame(height: 20)
-                    ConnectButton(state: vpn.state) {
-                        if vpn.state == .idle {
-                            Task { await vpn.connect() }
-                        } else {
-                            vpn.disconnect()
+            GeometryReader { geo in
+                ScrollView {
+                    if WideLayout.fits(geo.size) {
+                        // Unfolded iPhone Duo, iPad: the button on one half, the cards on the other, the gap
+                        // between them in the middle, where the Duo folds.
+                        HStack(spacing: WideLayout.gap) {
+                            connectPanel.frame(maxWidth: .infinity)
+                            cards.frame(maxWidth: .infinity)
                         }
-                    }
-                    TrafficRow()
-                    Spacer().frame(height: 20)
-                    ServerCard(server: model.selectedServer, ping: model.selectedServer.flatMap { model.pings[$0.key] }) {
-                        showServers = true
-                    }
-                    AccountCard()
-                        .padding(.top, 12)
-                    if let announce = model.subscription?.announce {
-                        Text(announce)
-                            .font(.subheadline)
-                            .card()
-                            .padding(.top, 12)
-                    }
-                    QuickActions(onSupport: { showSupport = true })
-                        .padding(.top, 20)
-                    if !model.config.telegramProxies.isEmpty {
-                        Button { showProxies = true } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "paperplane.circle.fill").font(.title2)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Прокси для Telegram").font(.subheadline.weight(.semibold))
-                                    Text("Telegram без VPN").font(.caption).foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").foregroundColor(.secondary)
-                            }
-                            .foregroundColor(.primary)
-                            .padding(16)
-                            .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 16)
+                        .frame(maxWidth: WideLayout.maxWidth)
+                        .frame(maxWidth: .infinity, minHeight: geo.size.height)
+                    } else {
+                        VStack(spacing: 0) {
+                            connectPanel.padding(.top, 12)
+                            Spacer().frame(height: 20)
+                            cards
                         }
-                        .buttonStyle(.plain)
-                        .padding(.top, 8)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 16)
+                        .frame(maxWidth: 560)
+                        .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
+                .refreshable { model.refreshSubscription(showMessage: true) }
             }
             .background(BrandBackdrop())
-            .refreshable { model.refreshSubscription(showMessage: true) }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Image("Logo").resizable().scaledToFit().frame(height: 26).foregroundColor(.primary)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                    // Title and icon: on the iPhone Duo the bar may stand vertically at the side.
+                    Button { showSettings = true } label: { Label("Настройки", systemImage: "gearshape") }
                 }
             }
         }
@@ -91,6 +67,59 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showProxies) {
             TelegramProxiesSheet(proxies: model.config.telegramProxies)
+        }
+    }
+
+    /** State, the connect button and the speed. */
+    private var connectPanel: some View {
+        VStack(spacing: 0) {
+            StatusHeader(state: vpn.state)
+            Spacer().frame(height: 20)
+            ConnectButton(state: vpn.state) {
+                if vpn.state == .idle {
+                    Task { await vpn.connect() }
+                } else {
+                    vpn.disconnect()
+                }
+            }
+            TrafficRow()
+        }
+    }
+
+    /** Server, plan, announcement, links and the Telegram proxies. */
+    private var cards: some View {
+        VStack(spacing: 0) {
+            ServerCard(server: model.selectedServer, ping: model.selectedServer.flatMap { model.pings[$0.key] }) {
+                showServers = true
+            }
+            AccountCard()
+                .padding(.top, 12)
+            if let announce = model.subscription?.announce {
+                Text(announce)
+                    .font(.subheadline)
+                    .card()
+                    .padding(.top, 12)
+            }
+            QuickActions(onSupport: { showSupport = true })
+                .padding(.top, 20)
+            if !model.config.telegramProxies.isEmpty {
+                Button { showProxies = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "paperplane.circle.fill").font(.title2)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Прокси для Telegram").font(.subheadline.weight(.semibold))
+                            Text("Telegram без VPN").font(.caption).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").foregroundColor(.secondary)
+                    }
+                    .foregroundColor(.primary)
+                    .padding(16)
+                    .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 8)
+            }
         }
     }
 }

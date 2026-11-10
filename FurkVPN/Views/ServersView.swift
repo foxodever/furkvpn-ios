@@ -72,8 +72,7 @@ struct ServersView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     if model.pinging { ProgressView() }
                     // Stays enabled while pinging: pressing it again starts over.
-                    Button { model.testPings() } label: { Image(systemName: "bolt.horizontal.circle") }
-                        .accessibilityLabel("Проверить пинг")
+                    Button { model.testPings() } label: { Label("Проверить пинг", systemImage: "bolt.horizontal.circle") }
                 }
             }
             .task {
