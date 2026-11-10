@@ -7,17 +7,20 @@ import NetworkExtension
  * pointing at the old one fails right after "connecting".
  */
 enum TunnelExtension {
-    static let bundleId: String? = {
+    /** PlugIns/….appex of the packet tunnel. */
+    static let bundleURL: URL? = {
         guard let plugins = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: plugins, includingPropertiesForKeys: nil) else { return nil }
         for url in items where url.pathExtension == "appex" {
             guard let bundle = Bundle(url: url),
                   let ext = bundle.object(forInfoDictionaryKey: "NSExtension") as? [String: Any],
                   ext["NSExtensionPointIdentifier"] as? String == "com.apple.networkextension.packet-tunnel" else { continue }
-            return bundle.bundleIdentifier
+            return url
         }
         return nil
     }()
+
+    static let bundleId: String? = bundleURL.flatMap { Bundle(url: $0)?.bundleIdentifier }
 
     static var id: String { bundleId ?? (Bundle.main.bundleIdentifier ?? "com.furkvpn.app") + ".tunnel" }
 }
@@ -264,6 +267,10 @@ final class VPNController: ObservableObject {
             ("Профиль VPN", status + (manager?.isEnabled == false ? ", выключен" : "")),
             ("App Group", Store.groupId ?? "нет — сервер передаётся при подключении"),
             ("Последняя ошибка", lastError ?? Store.tunnelError(since: .distantPast) ?? "—"),
+            ("Подпись приложения", SignatureReport.app),
+            ("Подпись расширения", SignatureReport.tunnel),
+            ("Профиль подписи приложения", SignatureReport.appProfile),
+            ("Профиль подписи расширения", SignatureReport.tunnelProfile),
         ]
     }
 

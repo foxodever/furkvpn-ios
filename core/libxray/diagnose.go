@@ -145,22 +145,7 @@ func DebugErrors(lines int) string {
 // keep out of the tunnel would go into it and get none. JSON: {"unbound":"ok 41 мс" or the error,
 // "en0":..., "pdp_ip0":...}.
 func ProbeNetwork(ifaces string) string {
-	probe := func(bind string) string {
-		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			d := net.Dialer{}
-			if bind != "" {
-				d.Control = dialControlBound(bind)
-			}
-			return d.DialContext(ctx, "tcp", "77.88.8.8:53")
-		}}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		started := time.Now()
-		if _, err := r.LookupIP(ctx, "ip4", "ya.ru"); err != nil {
-			return err.Error()
-		}
-		return fmt.Sprintf("ok %d мс", time.Since(started).Milliseconds())
-	}
+	probe := func(bind string) string { return ProbeDNS("77.88.8.8:53", bind) }
 	result := map[string]string{}
 	var resultMu sync.Mutex
 	var wg sync.WaitGroup
@@ -180,6 +165,22 @@ func ProbeNetwork(ifaces string) string {
 	wg.Wait()
 	b, _ := json.Marshal(result)
 	return string(b)
+}
+
+// ProbeDNS asks the name server (host:port) over TCP for ya.ru, the socket bound to iface unless it
+// is empty: "ok 41 мс" or the error, after 2 s at most.
+func ProbeDNS(server string, iface string) string {
+	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		d := net.Dialer{Control: dialControlBound(iface)}
+		return d.DialContext(ctx, "tcp", server)
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	if _, err := r.LookupIP(ctx, "ip4", "ya.ru"); err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("ok %d мс", time.Since(started).Milliseconds())
 }
 
 // UsableInterfaces keeps, in order, those of names ("en0,pdp_ip0") that are up and have an address
