@@ -39,6 +39,15 @@ enum WideLayout {
     static let gap: CGFloat = 40
 
     static func fits(_ size: CGSize) -> Bool { size.width >= minWidth }
+
+    /**
+     * Extra room on the side with the smaller safe area inset, so the halves are centred on the window (the
+     * fold) rather than on its safe area: the Duo can put the status bar and the toolbar down one side.
+     */
+    static func centering(_ geo: GeometryProxy) -> EdgeInsets {
+        let leading = geo.safeAreaInsets.leading, trailing = geo.safeAreaInsets.trailing
+        return EdgeInsets(top: 0, leading: max(trailing - leading, 0), bottom: 0, trailing: max(leading - trailing, 0))
+    }
 }
 
 /** Short message at the bottom of the screen (the Android snackbar). */

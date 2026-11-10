@@ -19,6 +19,7 @@ struct OnboardingView: View {
                     }
                     .padding(24)
                     .frame(maxWidth: WideLayout.maxWidth)
+                    .padding(WideLayout.centering(geo))
                 } else {
                     VStack(spacing: 12) {
                         Spacer()

@@ -22,6 +22,7 @@ struct HomeView: View {
                         .padding(.horizontal, 24)
                         .padding(.vertical, 16)
                         .frame(maxWidth: WideLayout.maxWidth)
+                        .padding(WideLayout.centering(geo))
                         .frame(maxWidth: .infinity, minHeight: geo.size.height)
                     } else {
                         VStack(spacing: 0) {
