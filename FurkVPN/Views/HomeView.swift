@@ -98,6 +98,7 @@ struct HomeView: View {
             if let announce = model.subscription?.announce {
                 Text(announce)
                     .font(.subheadline)
+                    .wraps()
                     .card()
                     .padding(.top, 12)
             }
@@ -295,6 +296,7 @@ private struct AccountCard: View {
                     Text(details)
                         .font(.subheadline)
                         .foregroundColor(expired ? .onErrorCard : .secondary)
+                        .wraps()
                 }
                 if let limit, let used {
                     ProgressView(value: min(max(Double(used) / Double(limit), 0), 1))
@@ -302,6 +304,7 @@ private struct AccountCard: View {
                     Text("Использовано \(Format.bytes(used)) из \(Format.bytes(limit)) · осталось \(Format.bytes(max(limit - used, 0)))")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .wraps()
                 } else if let used, used > 0 {
                     Text("Использовано \(Format.bytes(used))")
                         .font(.caption)

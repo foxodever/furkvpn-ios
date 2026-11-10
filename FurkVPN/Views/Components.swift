@@ -25,6 +25,12 @@ struct CardBackground: ViewModifier {
 
 extension View {
     func card(_ color: Color = .card) -> some View { modifier(CardBackground(color: color)) }
+
+    /**
+     * All the lines the text needs. Without it a text can come out cut to one line with "…" when a stack
+     * is given a fixed height to share (the halves of the wide layout are as tall as the screen).
+     */
+    func wraps() -> some View { fixedSize(horizontal: false, vertical: true) }
 }
 
 /**
