@@ -102,6 +102,21 @@ enum Core {
         var fallback: String?
         /** The phone's own interface: the core's connections are bound to it, never into its own tunnel. */
         var interface: String?
+        /** Compatibility mode of the extension: nothing goes direct, rules that would send traffic direct send it through the server. */
+        var noDirect = false
+    }
+
+    /**
+     * The server config with its servers' names resolved and written in, and the addresses to keep out
+     * of the tunnel's routes (the servers and the name servers listed for their names).
+     */
+    static func pinTunnelServers(_ raw: String) -> (config: String, exclude: [String]) {
+        struct Answer: Decodable {
+            var config: String
+            var exclude: [String]
+        }
+        guard let a = try? JSONDecoder().decode(Answer.self, from: Data(LibxrayPinTunnelServers(raw).utf8)) else { return (raw, []) }
+        return (a.config, a.exclude)
     }
 
     /** The server's config with Xray's TUN inbound, the user's rules and traffic counters. */

@@ -31,6 +31,9 @@ type tunnelOptions struct {
 	// The phone's own network interface ("en0", "pdp_ip0"): every connection of the core is bound
 	// to it, so none of them can loop back into the tunnel the core itself serves.
 	Interface string `json:"interface"`
+	// Where iOS doesn't let the extension past its own tunnel (see compat.go), nothing goes direct:
+	// rules that would send traffic out of the phone directly send it through the server.
+	NoDirect bool `json:"noDirect"`
 }
 
 // routingOptions are Settings → Routing; missing switches take the app's defaults.
@@ -149,6 +152,9 @@ func buildTunnelConfig(source map[string]any, opts tunnelOptions) map[string]any
 		rules = append(rules, userRules(r, templateOutbounds, templateRules, &outbounds)...)
 	}
 	rules = append(rules, templateRules...)
+	if opts.NoDirect {
+		rules = withoutDirect(rules, outbounds, templateOutbounds, templateRules)
+	}
 	routing["rules"] = rules
 	// Auto-select sends traffic to the balancer's fallback until its first checks finish and while
 	// none of its servers answers; start with the server that was best a moment ago.
@@ -258,40 +264,7 @@ func userRules(r *routingOptions, templateOutbounds []map[string]any, templateRu
 		return fallbackTag
 	}
 
-	var catchAll map[string]any
-	for _, rule := range templateRules {
-		rm, ok := rule.(map[string]any)
-		if !ok || (rm["balancerTag"] == nil && rm["outboundTag"] == nil) {
-			continue
-		}
-		conditional := false
-		for k := range rm {
-			conditional = conditional || ruleConditions[k]
-		}
-		if !conditional {
-			catchAll = rm
-		}
-	}
-	proxyKey, proxyTag := "outboundTag", ""
-	switch {
-	case catchAll != nil && catchAll["balancerTag"] != nil:
-		proxyKey, proxyTag = "balancerTag", stringOf(catchAll["balancerTag"])
-	case catchAll != nil:
-		proxyTag = stringOf(catchAll["outboundTag"])
-	default:
-		for _, ob := range templateOutbounds {
-			if proxyProtocols[stringOf(ob["protocol"])] {
-				proxyTag = stringOf(ob["tag"])
-				break
-			}
-		}
-		if proxyTag == "" && len(templateOutbounds) > 0 {
-			proxyTag = stringOf(templateOutbounds[0]["tag"])
-		}
-		if proxyTag == "" {
-			proxyTag = "proxy"
-		}
-	}
+	proxyKey, proxyTag := proxyTarget(templateOutbounds, templateRules)
 
 	var result []any
 	for _, action := range []string{"block", "direct", "proxy"} {
@@ -344,6 +317,40 @@ func userRules(r *routingOptions, templateOutbounds []map[string]any, templateRu
 		}
 	}
 	return result
+}
+
+// proxyTarget is where the panel's catch-all rule sends traffic ("balancerTag" or "outboundTag" and
+// the tag), or the first proxy outbound when there is no such rule.
+func proxyTarget(templateOutbounds []map[string]any, templateRules []any) (key, tag string) {
+	var catchAll map[string]any
+	for _, rule := range templateRules {
+		rm, ok := rule.(map[string]any)
+		if !ok || (rm["balancerTag"] == nil && rm["outboundTag"] == nil) {
+			continue
+		}
+		conditional := false
+		for k := range rm {
+			conditional = conditional || ruleConditions[k]
+		}
+		if !conditional {
+			catchAll = rm
+		}
+	}
+	switch {
+	case catchAll != nil && catchAll["balancerTag"] != nil:
+		return "balancerTag", stringOf(catchAll["balancerTag"])
+	case catchAll != nil:
+		return "outboundTag", stringOf(catchAll["outboundTag"])
+	}
+	for _, ob := range templateOutbounds {
+		if proxyProtocols[stringOf(ob["protocol"])] {
+			return "outboundTag", stringOf(ob["tag"])
+		}
+	}
+	if len(templateOutbounds) > 0 && stringOf(templateOutbounds[0]["tag"]) != "" {
+		return "outboundTag", stringOf(templateOutbounds[0]["tag"])
+	}
+	return "outboundTag", "proxy"
 }
 
 // dnsOverTCP: "9.9.9.9" (DNS over UDP) becomes "tcp://9.9.9.9:53"; DoH, local and other servers

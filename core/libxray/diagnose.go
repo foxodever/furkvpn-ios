@@ -145,7 +145,13 @@ func DebugErrors(lines int) string {
 // keep out of the tunnel would go into it and get none. JSON: {"unbound":"ok 41 мс" or the error,
 // "en0":..., "pdp_ip0":...}.
 func ProbeNetwork(ifaces string) string {
-	probe := func(bind string) string { return ProbeDNS("77.88.8.8:53", bind) }
+	return ProbeNetworkVia("77.88.8.8", ifaces)
+}
+
+// ProbeNetworkVia is ProbeNetwork with another name server (an IP address): one that the tunnel
+// keeps out of its routes would answer even where nothing else gets out.
+func ProbeNetworkVia(server string, ifaces string) string {
+	probe := func(bind string) string { return ProbeDNS(net.JoinHostPort(server, "53"), bind) }
 	result := map[string]string{}
 	var resultMu sync.Mutex
 	var wg sync.WaitGroup

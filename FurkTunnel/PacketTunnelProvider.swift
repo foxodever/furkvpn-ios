@@ -42,6 +42,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var lastPath: Network.NWPath?
     /** Debug mode: the other ways out tried once the tunnel is up (`probeOtherWays`). */
     private var otherWays = ""
+    /**
+     * The server config with its servers' addresses written in, resolved before the tunnel's settings,
+     * and the addresses kept out of the tunnel's routes.
+     */
+    private var pinned: (config: String, exclude: [String]) = ("", [])
+    /**
+     * Compatibility mode: iOS doesn't let this extension past its own tunnel (an IPA re-signed with the
+     * app's App ID for the extension too) — the core runs unbound, its servers are out of the tunnel's
+     * routes, and nothing goes direct.
+     */
+    private var compat = false
     private var startedAt = Date()
     /** What iOS still allows this process, for the debug report. */
     private var memoryTimer: DispatchSourceTimer?
@@ -58,6 +69,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let tunDNS = "172.19.0.2"
     /** Yandex's second DNS: out of the tunnel's routes in debug mode, to see if an excluded route gets out. */
     private static let probeExcluded = "77.88.8.1"
+    /** Yandex DNS addresses (reachable under the operators' white lists) to probe the network with. */
+    private static let probeServers = ["77.88.8.8", "77.88.8.88", "77.88.8.7"]
+    /** One the tunnel doesn't keep out of its routes: such a one would answer whatever iOS lets through. */
+    private var probeServer: String { Self.probeServers.first { !pinned.exclude.contains($0) } ?? Self.probeServers[0] }
     private static let tunIPv6 = "fdfe:dcba:9876::1"
     private static let mtu = 1500
     private static let networkSettle: TimeInterval = 3
@@ -102,10 +117,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         startMemoryReports()
         LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
         // Debug mode: does this process reach the network at all, before there is a tunnel to go into?
-        if payload.debugUpload != nil { probeBefore = LibxrayProbeNetwork(physicalInterfaces.joined(separator: ",")) }
-        let lanDirect = Self.lanDirect(payload.routing)
-        routesLanDirect = lanDirect
-        let settings = Self.networkSettings(lanDirect: lanDirect, debug: payload.debugUpload != nil)
+        if payload.debugUpload != nil { probeBefore = LibxrayProbeNetworkVia(probeServer, physicalInterfaces.joined(separator: ",")) }
+        routesLanDirect = Self.lanDirect(payload.routing)
+        // While this process still reaches the network: the servers' addresses, to leave them out of the routes.
+        pinned = Core.pinTunnelServers(payload.config)
+        LibxrayDebugNote("servers pinned, \(pinned.exclude.count) addresses out of the tunnel")
+        let settings = tunnelSettings()
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
             if let error {
@@ -180,7 +197,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * With "LAN directly" the local network, link-local and multicast stay out of the routes, not only
      * go direct in Xray: device discovery (AirPlay, Chromecast, printers) works as without the VPN.
      */
-    private static func networkSettings(lanDirect: Bool, debug: Bool) -> NEPacketTunnelNetworkSettings {
+    /** The settings for the current routes, debug mode and servers. */
+    private func tunnelSettings() -> NEPacketTunnelNetworkSettings {
+        Self.networkSettings(lanDirect: routesLanDirect, debug: payload?.debugUpload != nil, exclude: pinned.exclude)
+    }
+
+    /**
+     * [exclude]: the servers' addresses (and the name servers for their names) stay out of the routes:
+     * the core reaches them even where iOS doesn't let this extension past its own tunnel.
+     */
+    private static func networkSettings(lanDirect: Bool, debug: Bool, exclude: [String]) -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: mtu)
         let routes = Core.tunnelRoutes(lanDirect: lanDirect)
@@ -188,11 +214,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // The DNS address is in 172.16/12, which "LAN directly" leaves out.
         ipv4.includedRoutes = routes.ipv4.map { NEIPv4Route(destinationAddress: $0.address, subnetMask: Self.mask($0.prefix)) }
             + [NEIPv4Route(destinationAddress: tunDNS, subnetMask: "255.255.255.255")]
-        if debug { ipv4.excludedRoutes = [NEIPv4Route(destinationAddress: probeExcluded, subnetMask: "255.255.255.255")] }
+        let v4 = exclude.filter { !$0.contains(":") } + (debug ? [probeExcluded] : [])
+        ipv4.excludedRoutes = v4.map { NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255") }
         settings.ipv4Settings = ipv4
         // IPv6 goes into the tunnel too, so it doesn't leak past the VPN; the core answers DNS with IPv4 only.
         let ipv6 = NEIPv6Settings(addresses: [tunIPv6], networkPrefixLengths: [126])
         ipv6.includedRoutes = routes.ipv6.map { NEIPv6Route(destinationAddress: $0.address, networkPrefixLength: NSNumber(value: $0.prefix)) }
+        ipv6.excludedRoutes = exclude.filter { $0.contains(":") }.map { NEIPv6Route(destinationAddress: $0, networkPrefixLength: 128) }
         settings.ipv6Settings = ipv6
         let dns = NEDNSSettings(servers: [tunDNS])
         dns.matchDomains = [""]
@@ -235,9 +263,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         // Warnings too: the app's diagnostics screen shows them (DebugLog).
         let interface = coreInterface
-        let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(
-            logLevel: "warning", routing: payload.routing, fallback: fallback, interface: interface))
-        LibxrayDebugNote("bound to \(interface ?? "nothing")")
+        let config = try Core.buildTunnelConfig(raw: pinned.config.isEmpty ? payload.config : pinned.config, options: .init(
+            logLevel: "warning", routing: payload.routing, fallback: fallback, interface: interface, noDirect: compat))
+        LibxrayDebugNote("bound to \(interface ?? "nothing")\(compat ? ", compatibility mode" : "")")
         if running { stopCore() }
         LibxrayDebugNote("core starting")
         let error = LibxrayStartTunnel(config, tunFd)
@@ -285,20 +313,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * the core is started bound to that interface.
      */
     /**
-     * Before the core starts: does a DNS query get out bound to each of the phone's interfaces, or only
-     * unbound? The core is bound to the first interface that works, unbound when only that works, and to
-     * the preferred interface when nothing does. Must run on [queue].
+     * Before the core starts: does a DNS query get out unbound and bound to each of the phone's
+     * interfaces? Unbound working means iOS lets this extension past its tunnel: the core is bound to the
+     * first interface that works (unbound when none does). Otherwise it is compatibility mode: unbound,
+     * the servers reached through the routes left out of the tunnel — binding to a second interface that
+     * still gets out (mobile data while on Wi-Fi) would spend mobile data and fail on one network only.
+     * Must run on [queue].
      */
     private func probeNetwork() {
-        probeResult = LibxrayProbeNetwork(physicalInterfaces.joined(separator: ","))
+        probeResult = LibxrayProbeNetworkVia(probeServer, physicalInterfaces.joined(separator: ","))
         LibxrayDebugNote("network probe \(probeResult)")
-        coreInterface = physicalInterface
-        guard let result = try? JSONDecoder().decode([String: String].self, from: Data(probeResult.utf8)) else { return }
-        if let working = physicalInterfaces.first(where: { result[$0]?.hasPrefix("ok") == true }) {
-            coreInterface = working
-        } else if result["unbound"]?.hasPrefix("ok") == true {
-            coreInterface = nil
-        }
+        let result = (try? JSONDecoder().decode([String: String].self, from: Data(probeResult.utf8))) ?? [:]
+        compat = result["unbound"]?.hasPrefix("ok") != true && !pinned.exclude.isEmpty
+        coreInterface = compat ? nil : physicalInterfaces.first(where: { result[$0]?.hasPrefix("ok") == true })
     }
 
     /**
@@ -309,7 +336,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      */
     private func probeOtherWays() -> String {
         let started = Date()
-        let endpoint = Network.NWEndpoint.hostPort(host: "77.88.8.8", port: 53)
+        let endpoint = Network.NWEndpoint.hostPort(host: Network.NWEndpoint.Host(probeServer), port: 53)
         var variants: [(String, NWParameters)] = [("NWConnection", .tcp)]
         if let name = physicalInterface, let interface = lastPath?.availableInterfaces.first(where: { $0.name == name }) {
             let parameters = NWParameters.tcp
@@ -319,7 +346,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let probeQueue = DispatchQueue(label: "com.furkvpn.tunnel.probe")
         let connections = variants.map { ($0.0, NWConnection(to: endpoint, using: $0.1)) }
         for (_, connection) in connections { connection.start(queue: probeQueue) }
-        let viaProvider = createTCPConnection(to: NWHostEndpoint(hostname: "77.88.8.8", port: "53"), enableTLS: false,
+        let viaProvider = createTCPConnection(to: NWHostEndpoint(hostname: probeServer, port: "53"), enableTLS: false,
                                               tlsParameters: nil, delegate: nil)
         let excluded = LibxrayProbeDNS("\(Self.probeExcluded):53", "")
         let left = 2 - Date().timeIntervalSince(started)
@@ -477,7 +504,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     + "из туннеля ↑\(self.totalUp) ↓\(self.totalDown) байт, сообщений от приложения \(self.messagesReceived).\n"
                     + "Сеть по iOS: \(self.pathInfo).\nАдреса: \(Core.interfaceSummary).\n"
                     + "Проверка сети до туннеля: \(before)\n"
-                    + "Проверка сети с туннелем: \(self.probeResult); ядро \(binding).\n"
+                    + "Проверка сети с туннелем: \(self.probeResult); ядро \(binding)"
+                    + "\(self.compat ? ", режим совместимости (без «напрямую»)" : ""), вне туннеля адресов серверов: \(self.pinned.exclude.count).\n"
                     + "Другие пути с туннелем: \(self.otherWays)\n"
                     + "\(steps)\nОшибки ядра:\n"
                     + String(LibxrayDebugErrors(8).suffix(1600))
@@ -524,15 +552,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
                 if let next = sent ?? (Store.groupId != nil ? TunnelPayload.fromStore() : nil) { self.payload = next }
                 let lanDirect = Self.lanDirect(self.payload?.routing ?? RoutingSettings())
-                guard lanDirect != self.routesLanDirect else {
+                // Another server: its addresses (the name servers it was looked up with are out of the routes already).
+                let previous = self.pinned.exclude
+                if let config = self.payload?.config { self.pinned = Core.pinTunnelServers(config) }
+                guard lanDirect != self.routesLanDirect || Set(self.pinned.exclude) != Set(previous) else {
                     self.restartCore("settings changed")
                     completionHandler?(Data())
                     return
                 }
-                // "LAN directly" changed: new routes for the tunnel, then the core on them.
+                // New routes for the tunnel ("LAN directly" or the servers changed), then the core on them.
                 self.routesLanDirect = lanDirect
                 self.reasserting = true
-                self.setTunnelNetworkSettings(Self.networkSettings(lanDirect: lanDirect, debug: self.payload?.debugUpload != nil)) { _ in
+                self.setTunnelNetworkSettings(self.tunnelSettings()) { _ in
                     self.queue.async {
                         if let fd = Self.findTunnelDescriptor() { self.tunFd = fd }
                         self.restartCore("routes changed")
