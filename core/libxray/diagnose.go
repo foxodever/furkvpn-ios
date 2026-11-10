@@ -109,14 +109,18 @@ func DiagnoseRunning(testURL string, iface string) string {
 			}
 		}
 		if ip != nil && !e.udp {
+			via := iface
+			if via == "" {
+				via = "без привязки"
+			}
 			d := net.Dialer{Timeout: 3 * time.Second, Control: dialControlBound(iface)}
 			started := time.Now()
 			conn, err := d.Dial("tcp", net.JoinHostPort(ip.String(), strconv.Itoa(e.port)))
 			if err != nil {
-				fmt.Fprintf(&b, "TCP через %s: %v", iface, err)
+				fmt.Fprintf(&b, "TCP через %s: %v", via, err)
 			} else {
 				conn.Close()
-				fmt.Fprintf(&b, "TCP через %s: %d мс", iface, time.Since(started).Milliseconds())
+				fmt.Fprintf(&b, "TCP через %s: %d мс", via, time.Since(started).Milliseconds())
 			}
 		}
 		b.WriteString("\n")
@@ -136,11 +140,11 @@ func DebugErrors(lines int) string {
 	return strings.Join(list, "\n")
 }
 
-// ProbeNetwork asks 77.88.8.8 over TCP for a name, once with the socket bound to iface and once
-// without, before the core reads the tunnel. Only a real answer counts: an unbound socket of a
-// process iOS doesn't keep out of the tunnel would go into it and get none. JSON:
-// {"bound":"ok 41 мс" or the error, "unbound":...}.
-func ProbeNetwork(iface string) string {
+// ProbeNetwork asks 77.88.8.8 over TCP for a name: without binding and bound to each of ifaces
+// ("en0,pdp_ip0"), all at once. Only a real answer counts: an unbound socket of a process iOS doesn't
+// keep out of the tunnel would go into it and get none. JSON: {"unbound":"ok 41 мс" or the error,
+// "en0":..., "pdp_ip0":...}.
+func ProbeNetwork(ifaces string) string {
 	probe := func(bind string) string {
 		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			d := net.Dialer{}
@@ -157,10 +161,99 @@ func ProbeNetwork(iface string) string {
 		}
 		return fmt.Sprintf("ok %d мс", time.Since(started).Milliseconds())
 	}
-	result := map[string]string{"unbound": probe("")}
-	if iface != "" {
-		result["bound"] = probe(iface)
+	result := map[string]string{}
+	var resultMu sync.Mutex
+	var wg sync.WaitGroup
+	for _, name := range append([]string{""}, splitNames(ifaces)...) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			answer := probe(name)
+			if name == "" {
+				name = "unbound"
+			}
+			resultMu.Lock()
+			result[name] = answer
+			resultMu.Unlock()
+		}()
 	}
+	wg.Wait()
 	b, _ := json.Marshal(result)
 	return string(b)
+}
+
+// UsableInterfaces keeps, in order, those of names ("en0,pdp_ip0") that are up and have an address
+// to reach the internet with (IPv4 or global IPv6): iOS lists Wi-Fi that is on but not joined to a
+// network as well, and a socket bound to it gets "network is unreachable".
+func UsableInterfaces(names string) string {
+	var usable []string
+	for _, name := range splitNames(names) {
+		if len(interfaceAddresses(name)) > 0 {
+			usable = append(usable, name)
+		}
+	}
+	return strings.Join(usable, ",")
+}
+
+// InterfaceSummary describes the interfaces that are up, for the debug report:
+// "en0 192.168.1.5 · pdp_ip0 10.1.2.3 +IPv6 · utun4 172.19.0.1".
+func InterfaceSummary() string {
+	list, err := net.Interfaces()
+	if err != nil {
+		return err.Error()
+	}
+	var parts []string
+	for _, ifi := range list {
+		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		var v4 []string
+		v6 := 0
+		for _, ip := range interfaceAddresses(ifi.Name) {
+			if ip.To4() != nil {
+				v4 = append(v4, ip.String())
+			} else {
+				v6++
+			}
+		}
+		if len(v4) == 0 && v6 == 0 {
+			continue
+		}
+		part := ifi.Name + " " + strings.Join(v4, ",")
+		if v6 > 0 {
+			part += " +IPv6"
+		}
+		parts = append(parts, strings.TrimSpace(part))
+	}
+	if len(parts) == 0 {
+		return "нет интерфейсов с адресом"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// interfaceAddresses returns the interface's addresses other than link-local ones; none when it is
+// down or missing.
+func interfaceAddresses(name string) []net.IP {
+	ifi, err := net.InterfaceByName(name)
+	if err != nil || ifi.Flags&net.FlagUp == 0 {
+		return nil
+	}
+	addrs, _ := ifi.Addrs()
+	var ips []net.IP
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLinkLocalUnicast() && !n.IP.IsLoopback() {
+			ips = append(ips, n.IP)
+		}
+	}
+	return ips
+}
+
+func splitNames(names string) []string {
+	var list []string
+	for _, name := range strings.Split(names, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			list = append(list, name)
+		}
+	}
+	return list
 }

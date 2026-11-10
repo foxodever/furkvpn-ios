@@ -1,5 +1,6 @@
 import Foundation
 import Libxray
+import Network
 
 /** Swift facade over the gomobile binding of core/libxray (the same Go code as in the Android app). */
 enum Core {
@@ -143,4 +144,22 @@ enum Core {
         let ms = LibxrayPingVia(config, url, timeoutMs, interface ?? "")
         return ms >= 0 ? ms : nil
     }
+
+    /**
+     * The phone's own interfaces ("en0", "pdp_ip0") for connections past the tunnel, best first: those
+     * the path goes through, then the rest, and only ones with an address — Wi-Fi that is on but joined
+     * to nothing is listed too, and a socket bound to it gets "network is unreachable".
+     */
+    static func physicalInterfaces(_ path: Network.NWPath) -> [String] {
+        let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
+        // The tunnel itself is an "other" interface; the list is in the order of preference.
+        let listed = path.availableInterfaces.filter { physical.contains($0.type) }
+        let ordered = listed.filter { path.usesInterfaceType($0.type) } + listed.filter { !path.usesInterfaceType($0.type) }
+        let names = ordered.map(\.name)
+        let usable = LibxrayUsableInterfaces(names.joined(separator: ",")).split(separator: ",").map(String.init)
+        return usable.isEmpty ? names : usable
+    }
+
+    /** The interfaces that are up with their addresses, for the debug report. */
+    static var interfaceSummary: String { LibxrayInterfaceSummary() }
 }

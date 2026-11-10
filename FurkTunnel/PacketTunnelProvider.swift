@@ -29,11 +29,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var totalDown: Int64 = 0
 
     private var monitor: NWPathMonitor?
-    /** "en0" or "pdp_ip0": what the core's connections are bound to. */
-    private var physicalInterface: String?
-    /** False when only unbound sockets reach the network (the probe before the start). */
-    private var bindCore = true
+    /** The phone's own interfaces ("en0", "pdp_ip0"), best first. */
+    private var physicalInterfaces: [String] = []
+    private var physicalInterface: String? { physicalInterfaces.first }
+    /** What the core's connections are bound to: the first interface the probe got out through, nil when only unbound sockets did. */
+    private var coreInterface: String?
     private var probeResult = ""
+    /** Debug mode: the same probe before the tunnel's settings are applied. */
+    private var probeBefore = ""
+    /** The path as iOS describes it, for the debug report. */
+    private var pathInfo = ""
     private var startedAt = Date()
     /** What iOS still allows this process, for the debug report. */
     private var memoryTimer: DispatchSourceTimer?
@@ -91,6 +96,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let url = payload.debugUpload { LibxrayStartDebugUpload(url, physicalInterface ?? "") }
         startMemoryReports()
         LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
+        // Debug mode: does this process reach the network at all, before there is a tunnel to go into?
+        if payload.debugUpload != nil { probeBefore = LibxrayProbeNetwork(physicalInterfaces.joined(separator: ",")) }
         let lanDirect = Self.lanDirect(payload.routing)
         routesLanDirect = lanDirect
         let settings = Self.networkSettings(lanDirect: lanDirect)
@@ -220,7 +227,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             best.serverKey == payload.serverKey && Date().timeIntervalSince(best.at) < Self.autoBestMaxAge ? best.tag : nil
         }
         // Warnings too: the app's diagnostics screen shows them (DebugLog).
-        let interface = bindCore ? physicalInterface : nil
+        let interface = coreInterface
         let config = try Core.buildTunnelConfig(raw: payload.config, options: .init(
             logLevel: "warning", routing: payload.routing, fallback: fallback, interface: interface))
         LibxrayDebugNote("bound to \(interface ?? "nothing")")
@@ -271,16 +278,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * the core is started bound to that interface.
      */
     /**
-     * Before the core reads the tunnel: does a DNS query get out with the socket bound to the phone's
-     * interface, or only without? The core is bound only if binding works (or nothing does).
+     * Before the core starts: does a DNS query get out bound to each of the phone's interfaces, or only
+     * unbound? The core is bound to the first interface that works, unbound when only that works, and to
+     * the preferred interface when nothing does. Must run on [queue].
      */
     private func probeNetwork() {
-        probeResult = LibxrayProbeNetwork(physicalInterface ?? "")
+        probeResult = LibxrayProbeNetwork(physicalInterfaces.joined(separator: ","))
         LibxrayDebugNote("network probe \(probeResult)")
+        coreInterface = physicalInterface
         guard let result = try? JSONDecoder().decode([String: String].self, from: Data(probeResult.utf8)) else { return }
-        let boundOK = result["bound"]?.hasPrefix("ok") == true
-        let unboundOK = result["unbound"]?.hasPrefix("ok") == true
-        bindCore = boundOK || !unboundOK
+        if let working = physicalInterfaces.first(where: { result[$0]?.hasPrefix("ok") == true }) {
+            coreInterface = working
+        } else if result["unbound"]?.hasPrefix("ok") == true {
+            coreInterface = nil
+        }
     }
 
     private func startPathMonitor() {
@@ -319,11 +330,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      */
     private func networkChanged(_ path: Network.NWPath) {
         pathSatisfied = path.status == .satisfied
-        // The tunnel itself is an "other" interface; the list is in the order of preference.
         let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
         let interfaces: [NWInterface] = path.availableInterfaces.filter { physical.contains($0.type) }
         let previousInterface = physicalInterface
-        physicalInterface = interfaces.first?.name
+        physicalInterfaces = Core.physicalInterfaces(path)
+        let status = pathSatisfied ? "\(path.status)" : "\(path.status) (\(path.unsatisfiedReason))"
+        let listed = path.availableInterfaces.map { "\($0.name) \($0.type)" }.joined(separator: ", ")
+        let types: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet, .other]
+        let used = types.filter { path.usesInterfaceType($0) }.map { "\($0)" }.joined(separator: "/")
+        pathInfo = "\(status), интерфейсы \(listed), идёт через \(used)"
         if physicalInterface != previousInterface, let url = payload?.debugUpload {
             LibxrayStopDebugUpload()
             LibxrayStartDebugUpload(url, physicalInterface ?? "")
@@ -346,6 +361,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard !key.isEmpty else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.pathKey == key, self.running else { return }
+            self.probeNetwork() // which interface gets out on the new network
             self.restartCore("network changed")
         }
         networkWork = work
@@ -389,15 +405,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard payload?.debugUpload != nil else { return }
         healthQueue.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self else { return }
-            let steps = LibxrayDiagnoseRunning("https://www.gstatic.com/generate_204", self.physicalInterface ?? "")
+            let bound = self.queue.sync { self.coreInterface }
+            let steps = LibxrayDiagnoseRunning("https://www.gstatic.com/generate_204", bound ?? "")
             self.queue.async {
                 if self.running { self.sampleTraffic() }
-                let summary = "Отчёт расширения: ядро \(self.running ? "работает" : "остановлено"), "
-                    + "интерфейс \(self.physicalInterface ?? "—"), из туннеля ↑\(self.totalUp) ↓\(self.totalDown) байт, "
-                    + "сообщений от приложения \(self.messagesReceived).\n"
-                    + "Проверка сети до запуска ядра (bound — через \(self.physicalInterface ?? "—"), unbound — без привязки): \(self.probeResult); "
-                    + "ядро \(self.bindCore ? "привязано" : "не привязано").\n\(steps)\nОшибки ядра:\n"
-                    + String(LibxrayDebugErrors(12).suffix(2500))
+                let before = self.probeBefore.isEmpty ? "—" : self.probeBefore
+                let binding = bound.map { "привязано к \($0)" } ?? "без привязки"
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+                let summary = "Отчёт расширения \(version): ядро \(self.running ? "работает" : "остановлено"), "
+                    + "из туннеля ↑\(self.totalUp) ↓\(self.totalDown) байт, сообщений от приложения \(self.messagesReceived).\n"
+                    + "Сеть по iOS: \(self.pathInfo).\nАдреса: \(Core.interfaceSummary).\n"
+                    + "Проверка сети до туннеля: \(before)\n"
+                    + "Проверка сети с туннелем: \(self.probeResult); ядро \(binding).\n"
+                    + "\(steps)\nОшибки ядра:\n"
+                    + String(LibxrayDebugErrors(8).suffix(1600))
                 LibxrayDebugNote("self-test done")
                 self.cancelTunnelWithError(Self.failure(summary))
             }

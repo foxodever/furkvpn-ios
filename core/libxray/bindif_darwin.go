@@ -10,8 +10,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// dialControlBound binds a socket to the network interface iface (IP_BOUND_IF), past the tunnel.
+// dialControlBound binds a socket to the network interface iface (IP_BOUND_IF), past the tunnel;
+// nil (no binding) for an empty iface.
 func dialControlBound(iface string) func(network, address string, c syscall.RawConn) error {
+	if iface == "" {
+		return nil
+	}
 	return func(network, address string, c syscall.RawConn) error {
 		ifi, err := net.InterfaceByName(iface)
 		if err != nil {

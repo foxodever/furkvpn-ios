@@ -1,6 +1,9 @@
 package libxray
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestServerEndpoints(t *testing.T) {
 	cfg := mustParse(t, `{"outbounds":[
@@ -13,5 +16,20 @@ func TestServerEndpoints(t *testing.T) {
 	}
 	if DiagnoseRunning("https://example.com", "") != "ядро не запущено" {
 		t.Error("diagnosed without a core")
+	}
+}
+
+func TestProbeAndInterfaces(t *testing.T) {
+	if UsableInterfaces("lo, no-such-if0,,") != "" {
+		t.Error("loopback or a missing interface counted as usable")
+	}
+	got := ProbeNetwork(" ,no-such-if0")
+	for _, key := range []string{`"unbound":`, `"no-such-if0":`} {
+		if !strings.Contains(got, key) {
+			t.Errorf("probe %s lacks %s", got, key)
+		}
+	}
+	if InterfaceSummary() == "" {
+		t.Error("empty interface summary")
 	}
 }

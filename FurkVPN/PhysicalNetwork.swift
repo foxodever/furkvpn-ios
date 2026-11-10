@@ -14,9 +14,7 @@ final class PhysicalNetwork {
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
-            // The tunnel itself is an "other" interface; the list is in the order of preference.
-            let physical = path.availableInterfaces.first { [.wifi, .cellular, .wiredEthernet].contains($0.type) }
-            self?.set(physical?.name)
+            self?.set(Core.physicalInterfaces(path).first)
         }
         monitor.start(queue: DispatchQueue(label: "com.furkvpn.network"))
     }
