@@ -1,6 +1,8 @@
 # Builds the iOS app (and the Mac one) on a macOS runner. The result (IPA, Mac zip and the end of the
 # build logs) is also force-pushed to the "ios-build" branch, so it can be fetched with the repository's
-# deploy key.
+# deploy key. An empty commit starts no build (the paths filter sees no changed file). When GitHub can't
+# give the job a runner ("not acquired by Runner of type hosted"), the run fails after ~15 minutes
+# without reaching the steps, so nothing comes to "ios-build": push again.
 name: iOS
 on:
   push:
