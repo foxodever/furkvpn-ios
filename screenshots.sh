@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Screenshots of the app in the iOS Simulator, to check the design without an iPhone: a demo build
-# (DEMO flag, Demo.swift: sample servers and a pretend connection — the VPN itself can't run in the
-# Simulator) on a small and a big iPhone, the foldable iPhone Duo (unfolded and folded), and an iPad.
-# Needs the framework with its simulator slice (build.sh builds both). → build/shots/*.png
+# Screenshots of the app in the iOS Simulator and on the Mac, to check the design without the devices: a
+# demo build (DEMO flag, Demo.swift: sample servers and a pretend connection — the VPN itself can't run in
+# the Simulator) on a small and a big iPhone, the foldable iPhone Duo (unfolded and folded), a big and a
+# small iPad, and the Mac build (Mac Catalyst) in a wide and a narrow window.
+# Needs the framework with its simulator and Mac slices (build.sh builds them). → build/shots/*.png
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=build/shots
@@ -28,7 +29,7 @@ def pick(pattern):
             return found[-1], runtime
     return None, None
 for label, pattern in [("se", r"^iPhone SE"), ("pro", r"^iPhone \d+ Pro$"), ("max", r"^iPhone \d+ Pro Max$"),
-                       ("duo", r"^iPhone Duo"), ("ipad", r"^iPad Pro.*13")]:
+                       ("duo", r"^iPhone Duo"), ("ipad", r"^iPad Pro.*13"), ("ipadmini", r"^iPad mini")]:
     t, runtime = pick(pattern)
     if t:
         print(f"{label}|{t['identifier']}|{runtime['identifier']}|{t['name']} (iOS {runtime['version']})")
@@ -90,9 +91,9 @@ shoot() {
   sleep 5
   xcrun simctl io "$udid" screenshot ${display:+--display=$display} "$OUT/$name.png" > /dev/null
 }
-# Every screen in both themes: device, file name prefix, display.
+# Every screen in both themes: device, file name prefix, display, "wide" for the list moved to the left too.
 scenarios() {
-  local udid=$1 prefix=$2 display=$3
+  local udid=$1 prefix=$2 display=$3 wide=${4:-}
   for theme in dark light; do
     xcrun simctl ui "$udid" appearance "$theme"
     shoot "$udid" "$prefix-$theme-1-welcome" "$display" -demo -demoWelcome
@@ -100,6 +101,7 @@ scenarios() {
     shoot "$udid" "$prefix-$theme-3-connected" "$display" -demo -demoConnected
     shoot "$udid" "$prefix-$theme-4-servers" "$display" -demo -demoConnected -demoServers
     shoot "$udid" "$prefix-$theme-5-settings" "$display" -demo -demoSettings
+    if [ -n "$wide" ]; then shoot "$udid" "$prefix-$theme-6-left" "$display" -demo -demoConnected -demoServersLeft; fi
   done
 }
 while IFS='|' read -r label type runtime title; do
@@ -110,7 +112,7 @@ while IFS='|' read -r label type runtime title; do
   xcrun simctl install "$udid" "$APP"
   if [ "$label" = duo ]; then
     if hinge "$udid" 180; then
-      scenarios "$udid" duo-open 3
+      scenarios "$udid" duo-open 3 wide
       hinge "$udid" 0 && scenarios "$udid" duo-folded 1
     else
       # Without the hinge: both displays as the simulator started (the one that is off comes out black).
@@ -119,10 +121,57 @@ while IFS='|' read -r label type runtime title; do
       scenarios "$udid" duo-outer 1
     fi
   else
-    scenarios "$udid" "$label" ""
+    case $label in ipad*) wide=wide ;; *) wide= ;; esac
+    scenarios "$udid" "$label" "" "$wide"
   fi
   xcrun simctl shutdown "$udid" || true
   xcrun simctl delete "$udid" || true
   echo "$title: done"
 done < build/devices.txt
+
+# The Mac: the demo build for Mac Catalyst, started with the window's size and theme. Each shot twice:
+# the window as the screen shows it (screencapture, if the runner may record the screen) and as the app
+# draws it itself (-demoSnapshot, *-app.png). Run in an || list (set -e is off there): steps return on failure.
+mac_shots() {
+  xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Debug \
+    -destination 'generic/platform=macOS,variant=Mac Catalyst' -derivedDataPath build/mac \
+    ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO \
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) DEMO' build -quiet || return 1
+  local app=build/mac/Build/Products/Debug-maccatalyst/FurkVPN.app
+  codesign -f -s - "$app/Contents/PlugIns/FurkTunnel.appex" && codesign -f -s - "$app" || return 1
+  # The id of the app's window, for screencapture -l (the owner's name needs no permission).
+  cat > build/winid.swift <<'SWIFT'
+import CoreGraphics
+import Foundation
+func area(_ w: [String: Any]) -> Double {
+    let b = w[kCGWindowBounds as String] as? [String: Double] ?? [:]
+    return (b["Width"] ?? 0) * (b["Height"] ?? 0)
+}
+let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+let mine = windows.filter { $0[kCGWindowOwnerName as String] as? String == CommandLine.arguments[1] && $0[kCGWindowLayer as String] as? Int == 0 }
+guard let id = mine.max(by: { area($0) < area($1) })?[kCGWindowNumber as String] as? Int else { exit(1) }
+print(id)
+SWIFT
+  xcrun swiftc -O build/winid.swift -o build/winid || return 1
+  mac_shoot() {
+    local name=$1 size=$2; shift 2
+    pkill -x FurkVPN || true
+    open -n "$app" --args -demoWindow "$size" -demoSnapshot "$PWD/$OUT/$name-app.png" "$@"
+    sleep 8
+    local id
+    if id=$(build/winid FurkVPN); then screencapture -x -o -l "$id" "$OUT/$name.png" || echo "$name: screencapture failed"; else echo "$name: no window"; fi
+    pkill -x FurkVPN || true
+    sleep 1
+  }
+  for theme in dark light; do
+    mac_shoot "mac-$theme-1-welcome" 1200x820 -demo -demoWelcome -demoTheme "$theme"
+    mac_shoot "mac-$theme-2-home" 1200x820 -demo -demoTheme "$theme"
+    mac_shoot "mac-$theme-3-connected" 1200x820 -demo -demoConnected -demoTheme "$theme"
+    mac_shoot "mac-$theme-5-settings" 1200x820 -demo -demoSettings -demoTheme "$theme"
+    mac_shoot "mac-$theme-6-left" 1200x820 -demo -demoConnected -demoServersLeft -demoTheme "$theme"
+    mac_shoot "mac-$theme-7-narrow" 440x820 -demo -demoConnected -demoTheme "$theme"
+  done
+  echo "Mac: done"
+}
+mac_shots || echo "Mac screenshots failed"
 ls "$OUT"

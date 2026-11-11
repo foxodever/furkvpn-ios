@@ -168,7 +168,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startMemoryReports() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.furkvpn.tunnel.memory"))
         timer.schedule(deadline: .now(), repeating: .seconds(5))
+        #if targetEnvironment(macCatalyst)
+        // A Mac doesn't limit the extension's memory like iOS does (and has no os_proc_available_memory).
+        timer.setEventHandler { LibxrayDebugMemoryLeft(-1) }
+        #else
         timer.setEventHandler { LibxrayDebugMemoryLeft(Int32(os_proc_available_memory() / 1_048_576)) }
+        #endif
         timer.resume()
         memoryTimer = timer
     }

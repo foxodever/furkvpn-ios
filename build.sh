@@ -3,13 +3,13 @@
 #   Xray-core → Frameworks/Libxray.xcframework (gomobile), FurkVPN.xcodeproj (XcodeGen), the app,
 #   then build/FurkVPN-<version>-unsigned.ipa: ad-hoc signed with the entitlements, for re-signing
 #   with a developer certificate (or TrollStore). Set REBUILD_CORE=1 to rebuild the framework (it has
-#   a simulator slice too, for screenshots.sh).
+#   a simulator slice too, for screenshots.sh, and the Mac Catalyst ones for build-mac.sh).
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=build
 if [ ! -d Frameworks/Libxray.xcframework ] || [ "${REBUILD_CORE:-0}" = 1 ]; then
   rm -rf Frameworks/Libxray.xcframework
-  (cd core && gomobile bind -target=ios/arm64,iossimulator/arm64 -iosversion=15.0 -trimpath \
+  (cd core && gomobile bind -target=ios/arm64,iossimulator/arm64,maccatalyst/arm64,maccatalyst/amd64 -iosversion=15.0 -trimpath \
     -ldflags="-s -w -buildid= -checklinkname=0" -o ../Frameworks/Libxray.xcframework ./libxray)
 fi
 xcodegen generate

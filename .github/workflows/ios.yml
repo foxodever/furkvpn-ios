@@ -1,5 +1,6 @@
-# Builds the iOS app on a macOS runner. The result (IPA and the end of the build log) is also
-# force-pushed to the "ios-build" branch, so it can be fetched with the repository's deploy key.
+# Builds the iOS app (and the Mac one) on a macOS runner. The result (IPA, Mac zip and the end of the
+# build logs) is also force-pushed to the "ios-build" branch, so it can be fetched with the repository's
+# deploy key.
 name: iOS
 on:
   push:
@@ -38,38 +39,48 @@ jobs:
         uses: actions/cache@v4
         with:
           path: Frameworks/Libxray.xcframework
-          key: libxray-ios-sim-xcode27-${{ hashFiles('core/**') }}
+          key: libxray-ios-sim-mac-xcode27-${{ hashFiles('core/**') }}
       - name: Build Xray-core for iOS
         if: steps.core.outputs.cache-hit != 'true'
         working-directory: core
         run: |
           go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
           gomobile init
-          gomobile bind -target=ios/arm64,iossimulator/arm64 -iosversion=15.0 -trimpath \
+          gomobile bind -target=ios/arm64,iossimulator/arm64,maccatalyst/arm64,maccatalyst/amd64 -iosversion=15.0 -trimpath \
             -ldflags="-s -w -buildid= -checklinkname=0" -o ../Frameworks/Libxray.xcframework ./libxray 2>&1 | tee ../core.log
       - name: Build the app
         run: ./build.sh 2>&1 | tee build.log
+      # The Mac app (Mac Catalyst): its own step, so a problem there never holds back the IPA.
+      - name: Build the Mac app
+        continue-on-error: true
+        run: ./build-mac.sh 2>&1 | tee build-mac.log
       # Only for commits with "[shots]" in the message: they take several minutes of the runner.
       - name: Screenshots in the Simulator
         if: success() && contains(github.event.head_commit.message, '[shots]')
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 40
         run: ./screenshots.sh 2>&1 | tail -n 60 | tee shots.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:
           name: FurkVPN-ios
-          path: build/FurkVPN-*.ipa
+          path: |
+            build/FurkVPN-*.ipa
+            build/FurkVPN-*-mac-unsigned.zip
       - name: Result to the ios-build branch
         if: always()
         run: |
           mkdir out
-          cp build/FurkVPN-*.ipa out/ 2>/dev/null || true
+          cp build/FurkVPN-*.ipa build/FurkVPN-*-mac-unsigned.zip out/ 2>/dev/null || true
           cp core.log xcode.txt shots.log out/ 2>/dev/null || true
           if [ -d build/shots ]; then cp -R build/shots out/; fi
           if [ -f build.log ]; then
             grep -E 'error:|error |BUILD (SUCCEEDED|FAILED)|\*\* ' build.log | head -300 > out/errors.txt || true
             tail -n 300 build.log > out/build-tail.log
+          fi
+          if [ -f build-mac.log ]; then
+            grep -E 'error:|error |BUILD (SUCCEEDED|FAILED)|\*\* ' build-mac.log | head -300 > out/errors-mac.txt || true
+            tail -n 200 build-mac.log > out/build-mac-tail.log
           fi
           echo "${{ github.sha }} ${{ job.status }}" > out/status.txt
           cd out

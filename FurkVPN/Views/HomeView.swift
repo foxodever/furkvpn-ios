@@ -4,39 +4,32 @@ struct HomeView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vpn: VPNController
     @State private var showServers = false
-    @State private var showSettings = false
     @State private var showSupport = false
     @State private var showProxies = false
+    /** The list stands next to the main screen: no sheet for it, and Settings can move it to the other side. */
+    @State private var wide = false
 
     var body: some View {
         NavigationView {
             GeometryReader { geo in
-                ScrollView {
+                Group {
                     if WideLayout.fits(geo.size) {
-                        // Unfolded iPhone Duo, iPad: the button on one half, the cards on the other, the gap
-                        // between them in the middle, where the Duo folds.
-                        HStack(spacing: WideLayout.gap) {
-                            connectPanel.frame(maxWidth: .infinity)
-                            cards.frame(maxWidth: .infinity)
-                        }
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 16)
-                        .frame(maxWidth: WideLayout.maxWidth)
-                        .padding(WideLayout.centering(geo))
-                        .frame(maxWidth: .infinity, minHeight: geo.size.height)
+                        wideLayout(geo)
                     } else {
-                        VStack(spacing: 0) {
-                            connectPanel.padding(.top, 12)
-                            Spacer().frame(height: 20)
-                            cards
+                        ScrollView {
+                            homeColumn.padding(.horizontal, 20)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 16)
-                        .frame(maxWidth: 560)
-                        .frame(maxWidth: .infinity)
+                        .refreshable { model.refreshSubscription(showMessage: true) }
                     }
                 }
-                .refreshable { model.refreshSubscription(showMessage: true) }
+                .onAppear {
+                    wide = WideLayout.fits(geo.size)
+                    #if DEMO
+                    showServers = Demo.servers && !wide
+                    model.settingsOpen = Demo.settings
+                    #endif
+                }
+                .onChange(of: geo.size) { wide = WideLayout.fits($0) }
             }
             .background(BrandBackdrop())
             .navigationBarTitleDisplayMode(.inline)
@@ -46,22 +39,16 @@ struct HomeView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     // Title and icon: on the iPhone Duo the bar may stand vertically at the side.
-                    Button { showSettings = true } label: { Label("Настройки", systemImage: "gearshape") }
+                    Button { model.settingsOpen = true } label: { Label("Настройки", systemImage: "gearshape") }
                 }
             }
         }
         .navigationViewStyle(.stack)
-        #if DEMO
-        .onAppear {
-            showServers = Demo.servers
-            showSettings = Demo.settings
-        }
-        #endif
         .sheet(isPresented: $showServers) {
             ServersView().environmentObject(model).environmentObject(vpn).resizableSheet()
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(model).environmentObject(vpn)
+        .sheet(isPresented: $model.settingsOpen) {
+            SettingsView(wide: wide).environmentObject(model).environmentObject(vpn)
         }
         .sheet(isPresented: $showSupport) {
             SupportSheet(contacts: model.config.support, subscriptionSupport: model.subscription?.supportUrl)
@@ -71,10 +58,32 @@ struct HomeView: View {
         }
     }
 
-    /** State, the connect button and the speed. */
-    private var connectPanel: some View {
+    /**
+     * Unfolded iPhone Duo, iPad, Mac: the main screen on one half, the server list on the other, the gap
+     * between them in the middle, where the Duo folds. The list is on the right unless moved to the left.
+     */
+    private func wideLayout(_ geo: GeometryProxy) -> some View {
+        HStack(spacing: WideLayout.gap) {
+            if model.serversOnLeft { ServersPane().frame(maxWidth: .infinity) }
+            ScrollView {
+                homeColumn
+            }
+            .refreshable { model.refreshSubscription(showMessage: true) }
+            .frame(maxWidth: .infinity)
+            if !model.serversOnLeft { ServersPane().frame(maxWidth: .infinity) }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        .frame(maxWidth: WideLayout.maxWidth)
+        .padding(WideLayout.centering(geo))
+        .frame(maxWidth: .infinity)
+    }
+
+    /** The main screen itself: state, the connect button and the speed, then the cards under them. */
+    private var homeColumn: some View {
         VStack(spacing: 0) {
-            StatusHeader(state: vpn.state)
+            StatusHeader(state: vpn.state).padding(.top, 12)
             Spacer().frame(height: 20)
             ConnectButton(state: vpn.state) {
                 if vpn.state == .idle {
@@ -84,15 +93,24 @@ struct HomeView: View {
                 }
             }
             TrafficRow()
+            Spacer().frame(height: 20)
+            cards
         }
+        .padding(.bottom, 16)
+        // On big tablets the cards would get too wide.
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+    }
+
+    /** The server card opens the list only where it isn't on screen already. */
+    private var openServers: (() -> Void)? {
+        wide ? nil : { showServers = true }
     }
 
     /** Server, plan, announcement, links and the Telegram proxies. */
     private var cards: some View {
         VStack(spacing: 0) {
-            ServerCard(server: model.selectedServer, ping: model.selectedServer.flatMap { model.pings[$0.key] }) {
-                showServers = true
-            }
+            ServerCard(server: model.selectedServer, ping: model.selectedServer.flatMap { model.pings[$0.key] }, onTap: openServers)
             AccountCard()
                 .padding(.top, 12)
             if let announce = model.subscription?.announce {
@@ -117,9 +135,11 @@ struct HomeView: View {
                     }
                     .foregroundColor(.primary)
                     .padding(16)
+                    .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
                 }
                 .buttonStyle(.plain)
+                .hoverEffect(.highlight)
                 .padding(.top, 8)
             }
         }
@@ -189,10 +209,12 @@ private struct ConnectButton: View {
                 .foregroundColor(connected ? .onAccent : .primary)
                 .frame(width: 176, height: 176)
                 .contentShape(Circle())
+                .contentShape(.hoverEffect, Circle())
                 .glassSurface(Circle(), tint: connected ? .accentColor : nil, interactive: true, fallback: .cardHigh)
                 .shadow(color: .black.opacity(connected ? 0.25 : 0), radius: 8, y: 4)
             }
             .buttonStyle(.plain)
+            .hoverEffect(.lift)
             .animation(.easeInOut(duration: 0.3), value: connected)
         }
         .frame(width: 232, height: 232)
@@ -246,29 +268,40 @@ private struct TrafficRow: View {
 private struct ServerCard: View {
     var server: ServerEntry?
     var ping: Ping?
-    var onTap: () -> Void
+    /** Opens the list; nil when the list is on screen anyway (wide windows): then it is just a card. */
+    var onTap: (() -> Void)?
 
     var body: some View {
-        Button(action: onTap) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Сервер").font(.caption).foregroundColor(.secondary)
-                    if let server {
-                        ServerTitle(server: server)
-                    } else {
-                        Text("—")
-                    }
-                }
-                Spacer()
-                PingLabel(ping: ping, kind: server?.kind)
-                Image(systemName: "chevron.right").foregroundColor(.secondary)
+        if let onTap {
+            Button(action: onTap) {
+                content(chevron: true)
+                    .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+        } else {
+            content(chevron: false).card()
         }
-        .buttonStyle(.plain)
+    }
+
+    private func content(chevron: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Сервер").font(.caption).foregroundColor(.secondary)
+                if let server {
+                    ServerTitle(server: server)
+                } else {
+                    Text("—")
+                }
+            }
+            Spacer()
+            PingLabel(ping: ping, kind: server?.kind)
+            if chevron { Image(systemName: "chevron.right").foregroundColor(.secondary) }
+        }
+        .padding(chevron ? 16 : 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -374,8 +407,10 @@ private struct QuickActions: View {
             .frame(maxWidth: .infinity, minHeight: 64)
             .padding(.vertical, 12)
             .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 20, style: .continuous))
             .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
         }
         .buttonStyle(.plain)
+        .hoverEffect(.highlight)
     }
 }

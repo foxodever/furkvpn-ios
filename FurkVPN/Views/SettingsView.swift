@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 
 struct SettingsView: View {
+    /** The main screen shows the server list next to it: the side can be chosen. */
+    var wide = false
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var confirmLogout = false
@@ -30,8 +32,8 @@ struct SettingsView: View {
                     Button("Сменить ключ") { changeKey = true }
                     Button("Удалить ключ", role: .destructive) { confirmLogout = true }
                 }
-                // The TV's QR code is scanned with this phone's camera.
-                if CameraInfo.available {
+                // The TV's QR code is scanned with this phone's camera (not with a Mac's).
+                if CameraInfo.available && !Platform.isMac {
                     Section(footer: Text("Отсканируйте QR-код с экрана FurkVPN на телевизоре")) {
                         Button { scanningTv = true } label: { Label("Подключить телевизор", systemImage: "tv") }
                     }
@@ -43,8 +45,16 @@ struct SettingsView: View {
                             Text("Свои правила: напрямую, через VPN, блокировать").font(.caption).foregroundColor(.secondary)
                         }
                     }
-                    Button("Системные настройки VPN") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    // A Mac has no such page: VPN is in System Settings → VPN.
+                    if !Platform.isMac {
+                        Button("Системные настройки VPN") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                        }
+                    }
+                }
+                if wide {
+                    Section(header: Text("Интерфейс"), footer: Text("Удобно левшам — на iPad и раскрытом iPhone Duo")) {
+                        Toggle("Список серверов слева", isOn: $model.serversOnLeft)
                     }
                 }
                 Section(header: Text("Диагностика")) {

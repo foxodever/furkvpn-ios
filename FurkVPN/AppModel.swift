@@ -57,6 +57,11 @@ final class AppModel: ObservableObject {
     @Published var subscriptionUpdateHours: Int {
         didSet { Store.subscriptionUpdateHours = subscriptionUpdateHours }
     }
+    @Published var serversOnLeft: Bool {
+        didSet { Store.serversOnLeft = serversOnLeft }
+    }
+    /** The settings sheet; also opened from the menu (⌘, on a Mac or an iPad with a keyboard). */
+    @Published var settingsOpen = false
 
     let vpn = VPNController()
     private var configFetchedAt = Date.distantPast
@@ -74,6 +79,7 @@ final class AppModel: ObservableObject {
         selectedKey = Store.selectedServer
         routing = Store.routing
         subscriptionUpdateHours = Store.subscriptionUpdateHours
+        serversOnLeft = Store.serversOnLeft
         vpn.onError = { [weak self] message in self?.show("Ошибка подключения: \(message)") }
         _ = PhysicalNetwork.shared // starts watching the network before the first ping
         #if DEMO
@@ -86,6 +92,7 @@ final class AppModel: ObservableObject {
             account = Demo.welcome ? nil : Demo.account
             pings = Demo.pings
             selectedKey = Demo.subscription.servers.first?.key
+            serversOnLeft = Demo.serversLeft
         }
         #endif
     }

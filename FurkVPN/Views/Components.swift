@@ -35,12 +35,13 @@ extension View {
 
 /**
  * Two halves side by side when the window is wide enough for both: the unfolded iPhone Duo (its inner
- * display is wider than tall and doesn't keep the app in portrait), an iPad. Chosen by the space the
- * window has, not by the device: the Duo's halves, Split View and Slide Over give the narrow layout.
+ * display is wider than tall and doesn't keep the app in portrait), an iPad, a Mac window. Chosen by the
+ * space the window has, not by the device: the Duo's halves, Split View, Slide Over and a narrow Mac
+ * window give the narrow layout.
  */
 enum WideLayout {
     static let minWidth: CGFloat = 700
-    static let maxWidth: CGFloat = 1000
+    static let maxWidth: CGFloat = 1200
     /** Between the halves; the halves are equal, so on the Duo the gap lies over the fold. */
     static let gap: CGFloat = 40
 

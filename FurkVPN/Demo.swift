@@ -1,10 +1,13 @@
 #if DEMO
-import Foundation
+import SwiftUI
+import UIKit
 
 /**
- * Sample data for screenshots in the iOS Simulator (screenshots.sh builds with the DEMO flag;
- * the IPA never contains this). Launch arguments: -demo (sample subscription), -demoWelcome (no key),
- * -demoConnected, -demoServers, -demoSettings (open that screen).
+ * Sample data for screenshots in the iOS Simulator and on the Mac (screenshots.sh builds with the DEMO
+ * flag; the IPA never contains this). Launch arguments: -demo (sample subscription), -demoWelcome (no key),
+ * -demoConnected, -demoServers, -demoSettings (open that screen), -demoServersLeft (the list on the left of
+ * a wide window); for the Mac -demoTheme dark|light, -demoWindow 1200x820 (the window's size in points),
+ * -demoSnapshot <path> (the app saves a picture of its window there).
  */
 enum Demo {
     static let args = ProcessInfo.processInfo.arguments
@@ -13,6 +16,38 @@ enum Demo {
     static var connected: Bool { args.contains("-demoConnected") }
     static var servers: Bool { args.contains("-demoServers") }
     static var settings: Bool { args.contains("-demoSettings") }
+    static var serversLeft: Bool { args.contains("-demoServersLeft") }
+
+    private static func value(_ name: String) -> String? {
+        guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
+    static var colorScheme: ColorScheme? {
+        switch value("-demoTheme") {
+        case "dark": return .dark
+        case "light": return .light
+        default: return nil
+        }
+    }
+
+    static var windowSize: CGSize? {
+        let parts = value("-demoWindow")?.split(separator: "x").compactMap { Double($0) } ?? []
+        return parts.count == 2 ? CGSize(width: parts[0], height: parts[1]) : nil
+    }
+
+    /** A picture of the window drawn by the app itself: needs no permission to record the screen. */
+    static func snapshotLater() {
+        guard let path = value("-demoSnapshot") else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+            guard let window = windows.first(where: \.isKeyWindow) ?? windows.first else { return }
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try? image.pngData()?.write(to: URL(fileURLWithPath: path))
+        }
+    }
 
     private static func server(_ remarks: String, _ kind: ServerKind = .server, _ summary: String? = "VLESS · XHTTP · REALITY") -> ServerEntry {
         let scalars = Array(remarks.unicodeScalars)

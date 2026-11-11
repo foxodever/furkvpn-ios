@@ -26,7 +26,7 @@ enum Http {
 
     static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
 
-    static let userAgent = "FurkVPN/\(appVersion) iOS/\(UIDevice.current.systemVersion)"
+    static let userAgent = "FurkVPN/\(appVersion) \(Platform.osName)/\(Platform.osVersion)"
 
     static let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -34,14 +34,6 @@ enum Http {
         c.timeoutIntervalForResource = 60
         c.httpAdditionalHeaders = ["User-Agent": userAgent]
         return URLSession(configuration: c)
-    }()
-
-    /** "iPhone15,3": what Remnawave shows as the device model. */
-    static let deviceModel: String = {
-        var info = utsname()
-        uname(&info)
-        let machine = withUnsafeBytes(of: &info.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-        return machine.isEmpty ? UIDevice.current.model : machine
     }()
 
     /**
@@ -134,9 +126,9 @@ enum SubscriptionLoader {
             (data, response) = try await Http.get(url, headers: [
                 "Accept": "application/json",
                 "x-hwid": Http.deviceId,
-                "x-device-os": "iOS",
-                "x-ver-os": UIDevice.current.systemVersion,
-                "x-device-model": Http.deviceModel,
+                "x-device-os": Platform.osName,
+                "x-ver-os": Platform.osVersion,
+                "x-device-model": Platform.model,
             ])
         } catch {
             throw SubscriptionError.network(error)

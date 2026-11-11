@@ -14,5 +14,9 @@ struct RootView: View {
         .keyAlerts()
         .toast($model.toast)
         .tint(.accentColor)
+        #if DEMO
+        .preferredColorScheme(Demo.colorScheme)
+        .onAppear { Demo.snapshotLater() }
+        #endif
     }
 }

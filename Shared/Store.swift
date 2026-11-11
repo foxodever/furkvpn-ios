@@ -128,6 +128,12 @@ enum Store {
         set { defaults.set(newValue, forKey: "subscriptionUpdateHours") }
     }
 
+    /** Wide windows: the server list on the left of the main screen instead of the right (Settings → Интерфейс). */
+    static var serversOnLeft: Bool {
+        get { defaults.bool(forKey: "serversOnLeft") }
+        set { defaults.set(newValue, forKey: "serversOnLeft") }
+    }
+
     /** Settings → Диагностика → send the extension's log to the developer (temporary, for debugging). */
     static var debugUpload: Bool {
         get { defaults.bool(forKey: "debugUpload") }

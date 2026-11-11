@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct FurkVPNApp: App {
@@ -17,6 +18,61 @@ struct FurkVPNApp: App {
                 .onChange(of: scenePhase) { phase in
                     if phase == .active { model.onResume() }
                 }
+                .onAppear { MacWindow.configure() }
         }
+        .commands { AppCommands(model: model, vpn: model.vpn) }
+    }
+}
+
+/** The menu bar of the Mac and the ⌘ shortcuts of an iPad keyboard (hold ⌘ to see them). */
+struct AppCommands: Commands {
+    @ObservedObject var model: AppModel
+    @ObservedObject var vpn: VPNController
+
+    var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button("Настройки…") { model.settingsOpen = true }
+                .keyboardShortcut(",")
+                .disabled(model.subscription == nil)
+        }
+        // One window is enough for a VPN.
+        CommandGroup(replacing: .newItem) {}
+        CommandMenu("VPN") {
+            Button(vpn.state == .idle ? "Подключиться" : "Отключиться") {
+                if vpn.state == .idle {
+                    Task { await vpn.connect() }
+                } else {
+                    vpn.disconnect()
+                }
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(model.subscription == nil)
+            Divider()
+            Button("Проверить пинг") { model.testPings() }
+                .keyboardShortcut("t")
+                .disabled(model.subscription == nil)
+            Button("Обновить подписку") { model.refreshSubscription(showMessage: true) }
+                .keyboardShortcut("r")
+                .disabled(model.subscription == nil || model.refreshing)
+        }
+    }
+}
+
+/** The window of the Mac build: the content goes up under the title bar, and it can't get smaller than a phone. */
+enum MacWindow {
+    static func configure() {
+        #if targetEnvironment(macCatalyst)
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            scene.titlebar?.titleVisibility = .hidden
+            scene.titlebar?.toolbar = nil
+            scene.sizeRestrictions?.minimumSize = CGSize(width: 400, height: 640)
+            #if DEMO
+            if let size = Demo.windowSize {
+                scene.sizeRestrictions?.minimumSize = size
+                scene.sizeRestrictions?.maximumSize = size
+            }
+            #endif
+        }
+        #endif
     }
 }
