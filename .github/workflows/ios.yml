@@ -17,7 +17,8 @@ jobs:
     # Xcode 27 (iOS 27.1+ SDK): only apps built with it fill both displays of the iPhone Duo. The image
     # also has the Duo simulator.
     runs-on: xcode-27
-    timeout-minutes: 60
+    # The core for four platforms when core/ changed, then the IPA, the Mac app and the screenshots.
+    timeout-minutes: 100
     defaults:
       run:
         shell: bash
@@ -55,10 +56,13 @@ jobs:
         continue-on-error: true
         run: ./build-mac.sh 2>&1 | tee build-mac.log
       # Only for commits with "[shots]" in the message: they take several minutes of the runner.
+      # "[shots-wide]": only the wide windows (iPads and the Mac), much quicker.
       - name: Screenshots in the Simulator
-        if: success() && contains(github.event.head_commit.message, '[shots]')
+        if: success() && contains(github.event.head_commit.message, '[shots')
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: 45
+        env:
+          SHOTS_ONLY: ${{ contains(github.event.head_commit.message, '[shots-wide]') && 'ipad ipadmini mac' || '' }}
         run: ./screenshots.sh 2>&1 | tail -n 60 | tee shots.log
       - uses: actions/upload-artifact@v4
         if: success()

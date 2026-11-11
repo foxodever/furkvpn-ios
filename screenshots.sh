@@ -4,7 +4,10 @@
 # the Simulator) on a small and a big iPhone, the foldable iPhone Duo (unfolded and folded), a big and a
 # small iPad, and the Mac build (Mac Catalyst) in a wide and a narrow window.
 # Needs the framework with its simulator and Mac slices (build.sh builds them). → build/shots/*.png
+# SHOTS_ONLY="ipad mac …": only these labels (se pro max duo ipad ipadmini mac).
 set -euo pipefail
+ONLY=" ${SHOTS_ONLY:-} "
+wanted() { [ "$ONLY" = "  " ] || [[ "$ONLY" == *" $1 "* ]]; }
 cd "$(dirname "$0")"
 OUT=build/shots
 rm -rf "$OUT" && mkdir -p "$OUT"
@@ -105,6 +108,7 @@ scenarios() {
   done
 }
 while IFS='|' read -r label type runtime title; do
+  wanted "$label" || continue
   udid=$(xcrun simctl create "shots-$label" "$type" "$runtime")
   xcrun simctl boot "$udid"
   xcrun simctl bootstatus "$udid" -b > /dev/null
@@ -173,5 +177,5 @@ SWIFT
   done
   echo "Mac: done"
 }
-mac_shots || echo "Mac screenshots failed"
+if wanted mac; then mac_shots || echo "Mac screenshots failed"; fi
 ls "$OUT"
