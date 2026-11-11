@@ -11,6 +11,7 @@ Shared/       общее для обоих: модели, хранилище в 
 project.yml   описание проекта для XcodeGen (FurkVPN.xcodeproj в git не хранится)
 build.sh      сборка на macOS: ядро → Frameworks/Libxray.xcframework, проект, IPA
 build-mac.sh  приложение для Mac (Mac Catalyst) после build.sh → zip
+build-appstore.sh  сборка для App Store, подписанная Furry LLC, и загрузка в TestFlight
 screenshots.sh  скриншоты в симуляторе и на Mac (демо-сборка)
 ```
 
@@ -177,9 +178,21 @@ VPN в симуляторе не работает (там нет Network Extensi
 `com.furkvpn.app` и `com.furkvpn.app.tunnel`, в которых есть Network Extensions (Packet Tunnel) и App Group
 `group.com.furkvpn.app`. VPN-расширение работает только с платным аккаунтом Apple Developer.
 
-## Выпуск (позже)
+## TestFlight и App Store
 
-Для TestFlight и App Store нужен аккаунт организации (правило 5.4 App Review для VPN-приложений) и в секретах
-репозитория — ключ App Store Connect API (Issuer ID, Key ID, .p8) и Team ID; тогда в workflow добавляется
-подписанная сборка (`xcodebuild archive` с `-allowProvisioningUpdates`) и загрузка в TestFlight.
+Приложение в App Store Connect — «FurkVPN» (Apple ID 6833407359, bundle id `com.furkvpn.app`, SKU
+`furkvpn-ios`), команда Furry LLC (`2N5KR68546`). В аккаунте разработчика — App ID `com.furkvpn.app` и
+`com.furkvpn.app.tunnel` (Network Extensions, App Groups), App Group `group.com.furkvpn.app`, профили App Store
+«FurkVPN AppStore Distribution» и «FurkTunnel AppStore Distribution» на сертификат Apple Distribution.
+(ID с суффиксом `.2N5KR68546` — от переподписи, для App Store не нужны.)
+
+Если в сообщении коммита есть `[testflight]`, workflow после IPA и Mac запускает `build-appstore.sh`: архив с
+ручной подписью (у каждой цели свой профиль), экспорт IPA и та же выгрузка в App Store Connect; через 5–30 минут
+обработки сборка появляется в TestFlight. Профили скрипт берёт из App Store Connect API, так что после их
+перевыпуска ничего менять не нужно. Секреты репозитория: `IOS_P12_BASE64` и `IOS_P12_PASSWORD` — сертификат
+Apple Distribution с ключом (.p12 в base64), `ASC_KEY_P8` — ключ App Store Connect API «FurkVPN CI» (роль App
+Manager, .p8 в base64; Key ID и Issuer ID — в скрипте, они не секретные). Номер сборки для каждой выгрузки должен
+быть новым. `PrivacyInfo.xcprivacy` в приложении и в расширении — причины для API из обязательного списка Apple
+(UserDefaults, даты файлов, время с загрузки), без них App Store Connect сборку не принимает.
+
 Версия — `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` в `project.yml`.
