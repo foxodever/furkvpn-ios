@@ -23,6 +23,14 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 KEY="$TMP/AuthKey_$ASC_KEY_ID.p8"
 echo "$ASC_KEY_P8" | base64 --decode > "$KEY"
 echo "$IOS_P12_BASE64" | base64 --decode > "$TMP/dist.p12"
+# The Keychain reads only the old .p12 format (3DES, SHA-1 MAC): a .p12 made by OpenSSL 3 (AES-256,
+# SHA-256 MAC) fails with "MAC verification failed". Repack it with Homebrew's OpenSSL 3.
+OPENSSL=$(brew --prefix openssl@3 2>/dev/null)/bin/openssl
+[ -x "$OPENSSL" ] || OPENSSL=openssl
+"$OPENSSL" pkcs12 -in "$TMP/dist.p12" -passin env:IOS_P12_PASSWORD -nodes -out "$TMP/dist.pem"
+"$OPENSSL" pkcs12 -export -in "$TMP/dist.pem" -out "$TMP/dist.p12" -passout env:IOS_P12_PASSWORD \
+  -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+rm -f "$TMP/dist.pem"
 KC="$TMP/signing.keychain-db"
 KC_PASS=$(uuidgen)
 security delete-keychain "$KC" 2>/dev/null || true
