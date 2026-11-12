@@ -48,18 +48,36 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      */
     private var pinned: (config: String, exclude: [String]) = ("", [])
     /**
+     * The other servers of the subscription, resolved once before the tunnel's settings: their addresses by
+     * name for the app's pings, and the addresses, also out of the tunnel's routes — past a tunnel that is
+     * up, iOS lets a connection through only to an address out of its routes, the app's too.
+     */
+    private var subscription: (addresses: [String: String], exclude: [String]) = ([:], [])
+    /** What stays out of the tunnel's routes: the selected servers and their name servers, then the rest of the subscription. */
+    private var excluded: [String] {
+        var seen = Set<String>()
+        return (pinned.exclude + subscription.exclude).filter { seen.insert($0).inserted }
+    }
+    /**
      * Compatibility mode: iOS doesn't let this extension past its own tunnel (an IPA re-signed with the
      * app's App ID for the extension too) — the core runs unbound, its servers are out of the tunnel's
      * routes, and nothing goes direct.
      */
     private var compat = false
     private var startedAt = Date()
-    /** What iOS still allows this process, for the debug report. */
-    private var memoryTimer: DispatchSourceTimer?
     private var pathKey: String?
     private var pathSatisfied = true
     private var networkWork: DispatchWorkItem?
     private var healthTimer: DispatchSourceTimer?
+    /** Moves the "VPN stopped" notification on while this process lives (StopNotices). */
+    private var watchdogTimer: DispatchSourceTimer?
+    /** White list checks every few minutes while connected (Shared/Whitelist.swift). */
+    private var whitelistTimer: DispatchSourceTimer?
+    /** White list checks take seconds: neither the core's queue nor auto-select's. */
+    private let whitelistQueue = DispatchQueue(label: "com.furkvpn.tunnel.whitelist")
+    private var whitelistWork: DispatchWorkItem?
+    /** The extension stopped the tunnel itself and has said why: iOS's stop that may follow needs no notification. */
+    private var gaveUp = false
     private var lastHealthRestart = Date.distantPast
     private var sleptAt: Date?
     /** The server auto-select found best a moment ago, to start the next core with it as the fallback. */
@@ -72,7 +90,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /** Yandex DNS addresses (reachable under the operators' white lists) to probe the network with. */
     private static let probeServers = ["77.88.8.8", "77.88.8.88", "77.88.8.7"]
     /** One the tunnel doesn't keep out of its routes: such a one would answer whatever iOS lets through. */
-    private var probeServer: String { Self.probeServers.first { !pinned.exclude.contains($0) } ?? Self.probeServers[0] }
+    private var probeServer: String { Self.probeServers.first { !excluded.contains($0) } ?? Self.probeServers[0] }
     private static let tunIPv6 = "fdfe:dcba:9876::1"
     private static let mtu = 1500
     private static let networkSettle: TimeInterval = 3
@@ -80,6 +98,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let healthRestartMin: TimeInterval = 120
     private static let longSleep: TimeInterval = 5 * 60
     private static let autoBestMaxAge: TimeInterval = 10 * 60
+    private static let whitelistInterval = 5 * 60
 
     /** An NSError with the message, so the app gets it through fetchLastDisconnectError. */
     private static func failure(_ message: String) -> NSError {
@@ -113,15 +132,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         startedAt = Date()
         // The phone's network first: the core binds its connections to it.
         startPathMonitor()
-        if let url = payload.debugUpload { LibxrayStartDebugUpload(url, physicalInterface ?? "") }
-        startMemoryReports()
         LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
         // Debug mode: does this process reach the network at all, before there is a tunnel to go into?
-        if payload.debugUpload != nil { probeBefore = LibxrayProbeNetworkVia(probeServer, physicalInterfaces.joined(separator: ",")) }
+        if payload.debugMode == true { probeBefore = LibxrayProbeNetworkVia(probeServer, physicalInterfaces.joined(separator: ",")) }
         routesLanDirect = Self.lanDirect(payload.routing)
         // While this process still reaches the network: the servers' addresses, to leave them out of the routes.
         pinned = Core.pinTunnelServers(payload.config)
-        LibxrayDebugNote("servers pinned, \(pinned.exclude.count) addresses out of the tunnel")
+        // The other servers for the app's pings, and the white list check's sites for the checks.
+        subscription = Core.resolveServers((payload.servers ?? []) + (payload.probes ?? []))
+        LibxrayDebugNote("servers pinned, \(pinned.exclude.count) addresses out of the tunnel, \(subscription.exclude.count) of the subscription")
         let settings = tunnelSettings()
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
@@ -137,12 +156,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     self.tunFd = fd
                     LibxrayDebugNote("tunnel fd \(fd) \(Self.interfaceName(fd) ?? "?")")
                     self.probeNetwork()
-                    if payload.debugUpload != nil { self.otherWays = self.probeOtherWays() }
+                    if payload.debugMode == true { self.otherWays = self.probeOtherWays() }
                     try self.startCore()
                     self.startWatchers()
                     LibxrayDebugNote("started")
                     self.scheduleSelfTest()
                     completionHandler(nil)
+                    self.scheduleWhitelistCheck(after: 2)
                 } catch {
                     LibxrayDebugNote("start failed: \(error.localizedDescription)")
                     os_log("start failed: %{public}@", log: self.log, type: .error, error.localizedDescription)
@@ -159,36 +179,50 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.stopWatchers()
             self.stopCore()
             LibxrayDebugNote("stopped")
-            LibxrayStopDebugUpload()
-            self.memoryTimer?.cancel()
-            completionHandler()
+            // Not stopped by the user: say why (Settings → «Уведомлять об отключении VPN»), then let go.
+            var finished = false
+            let finish = {
+                self.queue.async {
+                    guard !finished else { return }
+                    finished = true
+                    completionHandler()
+                }
+            }
+            if self.gaveUp {
+                StopNotices.disarm()
+                finish()
+            } else {
+                StopNotices.stopped(reason, done: finish)
+            }
+            self.queue.asyncAfter(deadline: .now() + 1, execute: finish)
         }
     }
 
-    private func startMemoryReports() {
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.furkvpn.tunnel.memory"))
-        timer.schedule(deadline: .now(), repeating: .seconds(5))
-        #if targetEnvironment(macCatalyst)
-        // A Mac doesn't limit the extension's memory like iOS does (and has no os_proc_available_memory).
-        timer.setEventHandler { LibxrayDebugMemoryLeft(-1) }
-        #else
-        timer.setEventHandler { LibxrayDebugMemoryLeft(Int32(os_proc_available_memory() / 1_048_576)) }
-        #endif
-        timer.resume()
-        memoryTimer = timer
+    /** The extension gives up by itself: the error goes to the app (and to a notification, when they are on). */
+    private func giveUp(_ error: Error) {
+        gaveUp = true
+        StopNotices.disarm()
+        StopNotices.post("FurkVPN отключён", error.localizedDescription)
+        cancelTunnelWithError(error)
     }
 
+    // The phone goes to sleep and this process with it: the "VPN stopped" notification must not go off meanwhile.
     override func sleep(completionHandler: @escaping () -> Void) {
         sleptAt = Date()
+        StopNotices.disarm()
         completionHandler()
     }
 
     // After a long sleep the connections to the servers may be dead (the operator dropped them):
     // check auto-select's servers now instead of waiting for its next round.
     override func wake() {
+        StopNotices.arm()
         guard let slept = sleptAt else { return }
         sleptAt = nil
-        if Date().timeIntervalSince(slept) >= Self.longSleep { checkAutoSelect(afterSleep: true) }
+        if Date().timeIntervalSince(slept) >= Self.longSleep {
+            checkAutoSelect(afterSleep: true)
+            scheduleWhitelistCheck(after: 3)
+        }
     }
 
     // MARK: Core
@@ -204,7 +238,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      */
     /** The settings for the current routes, debug mode and servers. */
     private func tunnelSettings() -> NEPacketTunnelNetworkSettings {
-        Self.networkSettings(lanDirect: routesLanDirect, debug: payload?.debugUpload != nil, exclude: pinned.exclude)
+        Self.networkSettings(lanDirect: routesLanDirect, debug: payload?.debugMode == true, exclude: excluded)
     }
 
     /**
@@ -301,7 +335,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         } catch {
             os_log("restart failed: %{public}@", log: log, type: .error, error.localizedDescription)
             Store.setTunnelError(error.localizedDescription)
-            cancelTunnelWithError(error)
+            giveUp(error)
         }
         reasserting = false
     }
@@ -353,7 +387,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         for (_, connection) in connections { connection.start(queue: probeQueue) }
         let viaProvider = createTCPConnection(to: NWHostEndpoint(hostname: probeServer, port: "53"), enableTLS: false,
                                               tlsParameters: nil, delegate: nil)
-        let excluded = LibxrayProbeDNS("\(Self.probeExcluded):53", "")
+        let outside = LibxrayProbeDNS("\(Self.probeExcluded):53", "")
         let left = 2 - Date().timeIntervalSince(started)
         if left > 0 { Thread.sleep(forTimeInterval: left) }
         var lines: [String] = []
@@ -382,7 +416,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         viaProvider.cancel()
         lines.append("createTCPConnection: \(providerState)")
-        lines.append("сокет к \(Self.probeExcluded) из excludedRoutes: \(excluded)")
+        lines.append("сокет к \(Self.probeExcluded) из excludedRoutes: \(outside)")
         return lines.joined(separator: "; ")
     }
 
@@ -405,6 +439,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         timer.setEventHandler { [weak self] in self?.checkAutoSelectNow(afterSleep: false) }
         timer.resume()
         healthTimer = timer
+        let watchdog = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.furkvpn.tunnel.watchdog"))
+        watchdog.schedule(deadline: .now(), repeating: .seconds(20))
+        watchdog.setEventHandler { StopNotices.arm() }
+        watchdog.resume()
+        watchdogTimer = watchdog
+        let whitelist = DispatchSource.makeTimerSource(queue: whitelistQueue)
+        whitelist.schedule(deadline: .now() + .seconds(Self.whitelistInterval), repeating: .seconds(Self.whitelistInterval))
+        whitelist.setEventHandler { [weak self] in _ = self?.checkWhitelistNow() }
+        whitelist.resume()
+        whitelistTimer = whitelist
     }
 
     private func stopWatchers() {
@@ -414,6 +458,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         healthTimer = nil
         networkWork?.cancel()
         networkWork = nil
+        watchdogTimer?.cancel()
+        watchdogTimer = nil
+        whitelistTimer?.cancel()
+        whitelistTimer = nil
+        whitelistQueue.async {
+            self.whitelistWork?.cancel()
+            self.whitelistWork = nil
+        }
     }
 
     /**
@@ -424,7 +476,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pathSatisfied = path.status == .satisfied
         let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
         let interfaces: [NWInterface] = path.availableInterfaces.filter { physical.contains($0.type) }
-        let previousInterface = physicalInterface
         physicalInterfaces = Core.physicalInterfaces(path)
         lastPath = path
         let status = pathSatisfied ? "\(path.status)" : "\(path.status) (\(path.unsatisfiedReason))"
@@ -432,10 +483,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let types: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet, .other]
         let used = types.filter { path.usesInterfaceType($0) }.map { "\($0)" }.joined(separator: "/")
         pathInfo = "\(status), интерфейсы \(listed), идёт через \(used)"
-        if physicalInterface != previousInterface, let url = payload?.debugUpload {
-            LibxrayStopDebugUpload()
-            LibxrayStartDebugUpload(url, physicalInterface ?? "")
-        }
         // Wi-Fi ↔ cellular, or another interface to bind the core to; not the order of the rest.
         var names: Set<String> = []
         for interface in interfaces {
@@ -456,6 +503,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self, self.pathKey == key, self.running else { return }
             self.probeNetwork() // which interface gets out on the new network
             self.restartCore("network changed")
+            // Operators turn white lists on for mobile data: a new network is worth a check.
+            self.scheduleWhitelistCheck(after: 2)
         }
         networkWork = work
         queue.asyncAfter(deadline: .now() + Self.networkSettle, execute: work)
@@ -495,7 +544,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * as the error, which iOS hands to the app — a way out that needs neither shared files, nor messages,
      * nor the network. No report while the VPN stays "connected" means the extension died or hangs. */
     private func scheduleSelfTest() {
-        guard payload?.debugUpload != nil else { return }
+        guard payload?.debugMode == true else { return }
         healthQueue.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self else { return }
             let bound = self.queue.sync { self.coreInterface }
@@ -510,11 +559,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     + "Сеть по iOS: \(self.pathInfo).\nАдреса: \(Core.interfaceSummary).\n"
                     + "Проверка сети до туннеля: \(before)\n"
                     + "Проверка сети с туннелем: \(self.probeResult); ядро \(binding)"
-                    + "\(self.compat ? ", режим совместимости (без «напрямую»)" : ""), вне туннеля адресов серверов: \(self.pinned.exclude.count).\n"
+                    + "\(self.compat ? ", режим совместимости (без «напрямую»)" : ""), вне туннеля адресов серверов: \(self.pinned.exclude.count), всей подписки: \(self.subscription.exclude.count).\n"
                     + "Другие пути с туннелем: \(self.otherWays)\n"
                     + "\(steps)\nОшибки ядра:\n"
                     + String(LibxrayDebugErrors(8).suffix(1600))
                 LibxrayDebugNote("self-test done")
+                self.gaveUp = true
+                StopNotices.disarm()
                 self.cancelTunnelWithError(Self.failure(summary))
             }
         }
@@ -549,33 +600,95 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     completionHandler?(try? JSONEncoder().encode(debug))
                 }
             }
+        case .addresses:
+            queue.async { completionHandler?(try? JSONEncoder().encode(self.subscription.addresses)) }
+        case .whitelist:
+            whitelistQueue.async {
+                let check = self.checkWhitelistNow()
+                completionHandler?(check.flatMap { try? JSONEncoder().encode($0) })
+            }
         case let .reload(sent):
             queue.async {
-                guard self.running else {
-                    completionHandler?(Data())
-                    return
-                }
-                if let next = sent ?? (Store.groupId != nil ? TunnelPayload.fromStore() : nil) { self.payload = next }
-                let lanDirect = Self.lanDirect(self.payload?.routing ?? RoutingSettings())
-                // Another server: its addresses (the name servers it was looked up with are out of the routes already).
-                let previous = self.pinned.exclude
-                if let config = self.payload?.config { self.pinned = Core.pinTunnelServers(config) }
-                guard lanDirect != self.routesLanDirect || Set(self.pinned.exclude) != Set(previous) else {
-                    self.restartCore("settings changed")
-                    completionHandler?(Data())
-                    return
-                }
-                // New routes for the tunnel ("LAN directly" or the servers changed), then the core on them.
-                self.routesLanDirect = lanDirect
-                self.reasserting = true
-                self.setTunnelNetworkSettings(self.tunnelSettings()) { _ in
-                    self.queue.async {
-                        if let fd = Self.findTunnelDescriptor() { self.tunFd = fd }
-                        self.restartCore("routes changed")
-                        completionHandler?(Data())
-                    }
-                }
+                self.reload(sent ?? (Store.groupId != nil ? TunnelPayload.fromStore() : nil)) { completionHandler?(Data()) }
             }
         }
+    }
+
+    /** Starts the core again with [next] (the server or the settings changed), with new routes when needed. Must run on [queue]. */
+    private func reload(_ next: TunnelPayload?, done: @escaping () -> Void) {
+        guard running else {
+            done()
+            return
+        }
+        let probesBefore = payload?.probes ?? []
+        if let next { payload = next }
+        let lanDirect = Self.lanDirect(payload?.routing ?? RoutingSettings())
+        // Another server: its addresses (the name servers it was looked up with are out of the routes already).
+        // The subscription's are as resolved at the start: usually the new server's are among them.
+        let previous = Set(excluded)
+        if let config = payload?.config { pinned = Core.pinTunnelServers(config) }
+        // White list detection turned on or off: its sites in or out of the routes.
+        if let next, (next.probes ?? []) != probesBefore {
+            subscription = Core.resolveServers((next.servers ?? []) + (next.probes ?? []))
+        }
+        guard lanDirect != routesLanDirect || Set(excluded) != previous else {
+            restartCore("settings changed")
+            done()
+            return
+        }
+        // New routes for the tunnel ("LAN directly" or the servers changed), then the core on them.
+        routesLanDirect = lanDirect
+        reasserting = true
+        setTunnelNetworkSettings(tunnelSettings()) { _ in
+            self.queue.async {
+                if let fd = Self.findTunnelDescriptor() { self.tunFd = fd }
+                self.restartCore("routes changed")
+                done()
+            }
+        }
+    }
+
+    // MARK: White lists
+
+    private func scheduleWhitelistCheck(after seconds: Double) {
+        whitelistQueue.async {
+            self.whitelistWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in _ = self?.checkWhitelistNow() }
+            self.whitelistWork = work
+            self.whitelistQueue.asyncAfter(deadline: .now() + seconds, execute: work)
+        }
+    }
+
+    /**
+     * Asks the check's sites directly — at the addresses resolved before the tunnel and left out of its routes,
+     * the only ones iOS lets this process reach past its tunnel — and moves to the server for white lists when
+     * the operator turned them on (back when they are off). Nil when detection is off or the sites' addresses
+     * are unknown. Runs on [whitelistQueue]; blocks for up to ~6 s.
+     */
+    @discardableResult
+    private func checkWhitelistNow() -> WhitelistCheck? {
+        guard Store.whitelistDetect else { return nil }
+        let state: (running: Bool, addresses: [String: String], interface: String?, path: Network.NWPath?) =
+            queue.sync { (running, subscription.addresses, coreInterface, lastPath) }
+        let config = Store.loadRemoteConfig()?.whitelist ?? WhitelistConfig()
+        guard state.running, Whitelist.hosts(config).contains(where: { state.addresses[$0] != nil }) else { return nil }
+        var check = Whitelist.check(config, addresses: state.addresses, pinnedOnly: true, interface: state.interface,
+                                    network: state.path.map(Whitelist.networkKind) ?? "other")
+        LibxrayDebugNote("white lists: \(check.status.rawValue)")
+        guard let target = Whitelist.apply(&check) else {
+            SharedChange.post()
+            return check
+        }
+        // The server the check chose (Store.selectedServer now): the core moves to it.
+        let on = check.status == .whitelist
+        let done = DispatchSemaphore(value: 0)
+        queue.async {
+            self.reload(TunnelPayload.fromStore()) { done.signal() }
+        }
+        _ = done.wait(timeout: .now() + 10)
+        SharedChange.post()
+        StopNotices.post(on ? "Включены белые списки" : "Белые списки выключены",
+                         on ? "Переключили на \(target.displayName)" : "Вернули \(target.displayName)")
+        return check
     }
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Re-signed IPAs: a signing service that has one App ID signs the VPN extension with the app's
@@ -54,6 +56,102 @@ func PinTunnelServers(raw string) string {
 			answer.Config = strings.TrimSpace(buf.String())
 		}
 	}
+	b, _ := json.Marshal(answer)
+	return string(b)
+}
+
+// SubscriptionServers lists the server names and addresses of every config of a subscription (a JSON
+// array of raw configs), comma-separated, without repeats: the app sends them with the start of the
+// tunnel, for the extension to resolve (ResolveServers).
+func SubscriptionServers(configsJSON string) string {
+	var configs []string
+	if json.Unmarshal([]byte(configsJSON), &configs) != nil {
+		return ""
+	}
+	seen := map[string]bool{}
+	var hosts []string
+	for _, raw := range configs {
+		cfg, err := parseConfig(raw)
+		if err != nil {
+			continue
+		}
+		for _, host := range serverHosts(cfg, proxyOutbounds(cfg)) {
+			host = strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
+			if host != "" && !seen[host] {
+				seen[host] = true
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return strings.Join(hosts, ",")
+}
+
+// resolveServersTimeout bounds ResolveServers: the tunnel waits for it, and a name that doesn't
+// resolve in time is only left without a ping while the VPN is on.
+const resolveServersTimeout = 3 * time.Second
+
+// ResolveServers resolves the server names among hosts (comma-separated names and addresses) before the
+// tunnel is up, as PinTunnelServers does for the selected server's. JSON {"addresses": {name: address},
+// "exclude": [every address]}: the tunnel leaves all of them out of its routes, and the app's delay tests
+// connect to them while the VPN is on (SetServerAddresses) — past a tunnel that is up, iOS lets a
+// connection through only to an address out of its routes.
+func ResolveServers(hosts string) string {
+	answer := struct {
+		Addresses map[string]string `json:"addresses"`
+		Exclude   []string          `json:"exclude"`
+	}{Addresses: map[string]string{}, Exclude: []string{}}
+	excluded := map[string]bool{}
+	exclude := func(ip net.IP) {
+		if ip != nil && !ip.IsLoopback() && !excluded[ip.String()] {
+			excluded[ip.String()] = true
+			answer.Exclude = append(answer.Exclude, ip.String())
+		}
+	}
+	var names []string
+	listed := map[string]bool{}
+	for _, host := range strings.Split(hosts, ",") {
+		host = strings.Trim(strings.TrimSpace(host), "[]")
+		if ip := net.ParseIP(host); ip != nil {
+			exclude(ip)
+		} else if name := domainOf(host); name != "" && !listed[name] {
+			listed[name] = true
+			names = append(names, name)
+		}
+	}
+	var mu sync.Mutex
+	found := map[string]net.IP{}
+	var wg sync.WaitGroup
+	limit := make(chan struct{}, 16)
+	for _, name := range names {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			limit <- struct{}{}
+			defer func() { <-limit }()
+			if ip, err := lookupServer(nil, name); err == nil {
+				mu.Lock()
+				found[name] = ip
+				mu.Unlock()
+			}
+		}(name)
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(resolveServersTimeout):
+	}
+	mu.Lock()
+	for _, name := range names {
+		if ip := found[name]; ip != nil {
+			answer.Addresses[name] = ip.String()
+			exclude(ip)
+		}
+	}
+	mu.Unlock()
 	b, _ := json.Marshal(answer)
 	return string(b)
 }

@@ -170,6 +170,8 @@ struct RemoteConfig: Codable {
         ServerFilter(emoji: "🏴‍☠️", title: "Можно Торренты"),
     ]
     var delayTestUrl = "https://www.gstatic.com/generate_204"
+    /** White list detection: the sites to ask and the servers to switch between (Shared/Whitelist.swift). */
+    var whitelist = WhitelistConfig()
 
     init() {}
 
@@ -187,6 +189,7 @@ struct RemoteConfig: Codable {
         telegramProxies = (try? c.decodeIfPresent([TelegramProxy].self, forKey: .telegramProxies)) ?? d.telegramProxies
         serverFilters = (try? c.decodeIfPresent([ServerFilter].self, forKey: .serverFilters)) ?? d.serverFilters
         delayTestUrl = (try? c.decodeIfPresent(String.self, forKey: .delayTestUrl)) ?? d.delayTestUrl
+        whitelist = (try? c.decodeIfPresent(WhitelistConfig.self, forKey: .whitelist)) ?? d.whitelist
     }
 
     /** A broken server response must never lock users out: empty lists fall back to defaults. */

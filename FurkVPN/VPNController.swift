@@ -120,17 +120,34 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /**
+     * Settings → «Переподключаться автоматически»: an on-demand rule that has iOS start the tunnel again
+     * whenever it is down (killed, a network change) until the user turns the VPN off. Not for debug mode:
+     * its self-test stops the tunnel on purpose.
+     */
+    nonisolated static func applyOnDemand(_ manager: NETunnelProviderManager, on: Bool) {
+        let rule = NEOnDemandRuleConnect()
+        rule.interfaceTypeMatch = .any
+        manager.onDemandRules = [rule]
+        manager.isOnDemandEnabled = on
+    }
+
     /** Creates the VPN profile on first use: iOS asks the user to allow it. */
     private func preparedManager(_ payload: TunnelPayload?) async throws -> NETunnelProviderManager {
         let manager = self.manager ?? NETunnelProviderManager()
         let proto = (manager.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
         proto.providerBundleIdentifier = TunnelExtension.id
-        // For starts without the app (Shortcuts, the VPN switch in Settings) when there is no shared App Group.
-        if let payload { proto.providerConfiguration = [TunnelPayload.key: payload.encoded()] }
+        // For starts without the app (Shortcuts, the VPN switch in Settings) when there is no shared App Group;
+        // they never run the self-test of debug mode.
+        if var payload {
+            payload.debugMode = nil
+            proto.providerConfiguration = [TunnelPayload.key: payload.encoded()]
+        }
         proto.serverAddress = "FurkVPN"
         manager.protocolConfiguration = proto
         manager.localizedDescription = "FurkVPN"
         manager.isEnabled = true
+        Self.applyOnDemand(manager, on: Store.autoReconnect && payload?.debugMode != true)
         try await manager.saveToPreferences()
         // A freshly saved profile has to be loaded again before it can start.
         try await manager.loadFromPreferences()
@@ -140,7 +157,9 @@ final class VPNController: ObservableObject {
 
     func connect() async {
         do {
-            let payload = TunnelPayload.fromStore()
+            let payload = TunnelPayload.fromStore(debug: Store.debugMode)
+            // Debug mode is for this one connection: its self-test ends it anyway.
+            Store.debugMode = false
             let manager = try await preparedManager(payload)
             startedAt = Date()
             lastError = nil
@@ -163,7 +182,25 @@ final class VPNController: ObservableObject {
 
     func disconnect() {
         userStopped = true
-        manager?.connection.stopVPNTunnel()
+        guard let manager else { return }
+        // Otherwise iOS would bring it right back.
+        if manager.isOnDemandEnabled {
+            manager.isOnDemandEnabled = false
+            Task {
+                try? await manager.saveToPreferences()
+                manager.connection.stopVPNTunnel()
+            }
+            return
+        }
+        manager.connection.stopVPNTunnel()
+    }
+
+    /** Settings → «Переподключаться автоматически» changed: a connected VPN keeps it from now on, otherwise from the next connection. */
+    func setAutoReconnect(_ on: Bool) async {
+        Store.autoReconnect = on
+        guard let manager, isActive else { return }
+        Self.applyOnDemand(manager, on: on)
+        try? await manager.saveToPreferences()
     }
 
     var isConnected: Bool {

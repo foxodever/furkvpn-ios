@@ -11,18 +11,37 @@ final class PhysicalNetwork {
     private let monitor = NWPathMonitor()
     private let lock = NSLock()
     private var name: String?
+    private var networkKind = "other"
+    /** The network as a white list check sees it: its kind and interfaces. */
+    private var key: String?
+    /** Another network (Wi-Fi ↔ mobile data, another interface): called on a background queue. */
+    var onChange: (() -> Void)?
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
-            self?.set(Core.physicalInterfaces(path).first)
+            self?.set(path)
         }
         monitor.start(queue: DispatchQueue(label: "com.furkvpn.network"))
     }
 
-    private func set(_ value: String?) {
+    private func set(_ path: Network.NWPath) {
+        let interfaces = Core.physicalInterfaces(path)
+        let kind = Whitelist.networkKind(path)
+        let newKey = kind + " " + interfaces.joined(separator: ",")
         lock.lock()
-        name = value
+        name = interfaces.first
+        networkKind = kind
+        let changed = key != nil && key != newKey
+        key = newKey
         lock.unlock()
+        if changed { onChange?() }
+    }
+
+    /** "wifi", "cellular", "ethernet", "other" or "none". */
+    var kind: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return networkKind
     }
 
     var interfaceName: String? {

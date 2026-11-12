@@ -111,10 +111,12 @@ struct HomeView: View {
     private var cards: some View {
         VStack(spacing: 0) {
             ServerCard(server: model.selectedServer, ping: model.selectedServer.flatMap { model.pings[$0.key] }, onTap: openServers)
+            WhitelistCard()
+                .padding(.top, 12)
             AccountCard()
                 .padding(.top, 12)
             if let announce = model.subscription?.announce {
-                Text(announce)
+                Text(Linkify.text(announce))
                     .font(.subheadline)
                     .wraps()
                     .card()

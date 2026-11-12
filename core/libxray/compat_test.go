@@ -32,6 +32,50 @@ func TestPinTunnelServers(t *testing.T) {
 	}
 }
 
+func TestSubscriptionServers(t *testing.T) {
+	configs := []string{
+		`{"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"NL.example.com","port":443}]}},{"tag":"direct","protocol":"freedom"}]}`,
+		`{"outbounds":[{"tag":"proxy","protocol":"trojan","settings":{"servers":[{"address":"[2001:db8::1]","port":443}]}},
+		  {"tag":"proxy-2","protocol":"vless","settings":{"vnext":[{"address":"nl.example.com","port":443}]}}]}`,
+		"not json",
+	}
+	b, _ := json.Marshal(configs)
+	if got := SubscriptionServers(string(b)); got != "nl.example.com,2001:db8::1" {
+		t.Errorf("servers = %s", got)
+	}
+	if got := SubscriptionServers("garbage"); got != "" {
+		t.Errorf("garbage = %s", got)
+	}
+}
+
+func TestResolveServers(t *testing.T) {
+	var answer struct {
+		Addresses map[string]string
+		Exclude   []string
+	}
+	if err := json.Unmarshal([]byte(ResolveServers("1.2.3.4, [2001:db8::1],no-such-host.invalid,127.0.0.1,1.2.3.4")), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(answer.Exclude, ","); got != "1.2.3.4,2001:db8::1" {
+		t.Errorf("exclude = %s", got)
+	}
+	if len(answer.Addresses) != 0 {
+		t.Errorf("addresses = %v", answer.Addresses)
+	}
+}
+
+func TestSetServerAddresses(t *testing.T) {
+	SetServerAddresses(`{"Server.Invalid":"10.1.2.3","bad":"x"}`)
+	defer SetServerAddresses("{}")
+	if ip, err := lookupServer(nil, "server.invalid"); err != nil || ip.String() != "10.1.2.3" {
+		t.Errorf("given address: %v %v", ip, err)
+	}
+	SetServerAddresses("{}")
+	if _, err := lookupServer(nil, "server.invalid"); err == nil {
+		t.Error("forgotten address still used")
+	}
+}
+
 func TestNoDirect(t *testing.T) {
 	raw := `{"outbounds":[
 	  {"tag":"direct","protocol":"freedom"},

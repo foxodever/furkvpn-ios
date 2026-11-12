@@ -16,6 +16,7 @@ ASC_ISSUER_ID=${ASC_ISSUER_ID:-dcd4f8a1-f78d-47ca-91bf-b32e0e912659}
 # Profile names in the developer account, by bundle id.
 APP_PROFILE="FurkVPN AppStore Distribution"
 TUNNEL_PROFILE="FurkTunnel AppStore Distribution"
+WIDGET_PROFILE="FurkWidget AppStore Distribution"
 TMP=${RUNNER_TEMP:-$(mktemp -d)}
 rm -rf "$OUT" && mkdir -p "$OUT"
 
@@ -45,7 +46,7 @@ security find-identity -v -p codesigning "$KC"
 # The profiles, straight from the App Store Connect API.
 python3 -m venv "$TMP/venv"
 "$TMP/venv/bin/pip" install -q pyjwt cryptography
-"$TMP/venv/bin/python" - "$KEY" "$ASC_KEY_ID" "$ASC_ISSUER_ID" "$APP_PROFILE" "$TUNNEL_PROFILE" <<'EOF'
+"$TMP/venv/bin/python" - "$KEY" "$ASC_KEY_ID" "$ASC_ISSUER_ID" "$APP_PROFILE" "$TUNNEL_PROFILE" "$WIDGET_PROFILE" <<'EOF'
 import base64, json, os, sys, time, urllib.parse, urllib.request
 import jwt
 key_path, key_id, issuer, *names = sys.argv[1:]
@@ -77,7 +78,7 @@ xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Release \
   -archivePath "$OUT/FurkVPN.xcarchive" \
   CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=$TEAM CODE_SIGN_IDENTITY="Apple Distribution" \
   'PROVISIONING_PROFILE_SPECIFIER=$(FURK_PROFILE_$(TARGET_NAME))' \
-  "FURK_PROFILE_FurkVPN=$APP_PROFILE" "FURK_PROFILE_FurkTunnel=$TUNNEL_PROFILE" \
+  "FURK_PROFILE_FurkVPN=$APP_PROFILE" "FURK_PROFILE_FurkTunnel=$TUNNEL_PROFILE" "FURK_PROFILE_FurkWidget=$WIDGET_PROFILE" \
   OTHER_CODE_SIGN_FLAGS="--keychain $KC" archive
 
 options() {
@@ -95,6 +96,7 @@ options() {
 	<dict>
 		<key>com.furkvpn.app</key><string>$APP_PROFILE</string>
 		<key>com.furkvpn.app.tunnel</key><string>$TUNNEL_PROFILE</string>
+		<key>com.furkvpn.app.widget</key><string>$WIDGET_PROFILE</string>
 	</dict>
 	<key>uploadSymbols</key><true/>
 	<key>manageAppVersionAndBuildNumber</key><false/>
@@ -110,6 +112,7 @@ xcodebuild -exportArchive -archivePath "$OUT/FurkVPN.xcarchive" -exportOptionsPl
   -exportPath "$OUT" "${AUTH[@]}"
 (cd "$OUT" && rm -rf check && mkdir check && cd check && unzip -q ../FurkVPN.ipa \
   && codesign -d --entitlements - Payload/FurkVPN.app && codesign -d --entitlements - Payload/FurkVPN.app/PlugIns/FurkTunnel.appex \
+  && codesign -d --entitlements - Payload/FurkVPN.app/PlugIns/FurkWidget.appex \
   && ls Payload/FurkVPN.app/PrivacyInfo.xcprivacy Payload/FurkVPN.app/PlugIns/FurkTunnel.appex/PrivacyInfo.xcprivacy) 2>&1 | tail -60
 options upload
 xcodebuild -exportArchive -archivePath "$OUT/FurkVPN.xcarchive" -exportOptionsPlist "$OUT/upload.plist" \

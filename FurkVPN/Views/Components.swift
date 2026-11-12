@@ -11,7 +11,10 @@ extension Color {
     static let good = Color("Good")
 }
 
-/** Rounded block of the main screen, like the Android cards. */
+/**
+ * Rounded block of the main screen, like the Android cards: glass on iOS 26, as the server card and the
+ * buttons around it, a solid card before. Another color than the usual card's (the plan ran out) tints the glass.
+ */
 struct CardBackground: ViewModifier {
     var color: Color = .card
 
@@ -19,7 +22,7 @@ struct CardBackground: ViewModifier {
         content
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(color, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), tint: color == .card ? nil : color, fallback: color)
     }
 }
 
@@ -142,6 +145,43 @@ enum Format {
         case .testing: return nil
         case nil: return kind == .auto ? "авто" : nil
         }
+    }
+}
+
+/**
+ * Links in the announcement of the subscription, as on Android: addresses with http(s), Telegram names
+ * ("@FurkVPNbot" → t.me) and bare domains ("FurkVPN.info" → https). Text opens them on a tap.
+ */
+enum Linkify {
+    private static let pattern = try! NSRegularExpression(
+        pattern: #"(https?://[^\s]+)|(@[A-Za-z0-9_]{4,})|(\b[A-Za-z0-9-]+\.(?:info|ru|com|net|app|me)\b(?:/[^\s]*)?)"#)
+
+    static func text(_ string: String) -> AttributedString {
+        let ns = string as NSString
+        var result = AttributedString()
+        var last = 0
+        for match in pattern.matches(in: string, range: NSRange(location: 0, length: ns.length)) {
+            result.append(AttributedString(ns.substring(with: NSRange(location: last, length: match.range.location - last))))
+            let found = ns.substring(with: match.range)
+            // A sentence's punctuation right after the link is not part of it.
+            var value = found
+            while let end = value.last, ".,)!".contains(end) { value.removeLast() }
+            let address: String
+            if value.hasPrefix("@") {
+                address = "https://t.me/" + String(value.dropFirst())
+            } else if value.hasPrefix("http") {
+                address = value
+            } else {
+                address = "https://" + value
+            }
+            var link = AttributedString(value)
+            link.link = URL(string: address)
+            result.append(link)
+            result.append(AttributedString(String(found.dropFirst(value.count))))
+            last = match.range.location + match.range.length
+        }
+        result.append(AttributedString(ns.substring(from: last)))
+        return result
     }
 }
 

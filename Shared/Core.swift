@@ -119,6 +119,33 @@ enum Core {
         return (a.config, a.exclude)
     }
 
+    /** The server names and addresses of all the configs, without repeats: the extension resolves them (resolveServers). */
+    static func subscriptionServers(_ configs: [String]) -> [String] {
+        guard !configs.isEmpty, let json = try? JSONEncoder().encode(configs) else { return [] }
+        return LibxraySubscriptionServers(String(decoding: json, as: UTF8.self)).split(separator: ",").map(String.init)
+    }
+
+    /**
+     * Resolves the server names among [hosts] while this process still reaches the network (at most ~3 s):
+     * the addresses by name, and every address to leave out of the tunnel's routes.
+     */
+    static func resolveServers(_ hosts: [String]) -> (addresses: [String: String], exclude: [String]) {
+        struct Answer: Decodable {
+            var addresses: [String: String]
+            var exclude: [String]
+        }
+        guard !hosts.isEmpty,
+              let a = try? JSONDecoder().decode(Answer.self, from: Data(LibxrayResolveServers(hosts.joined(separator: ",")).utf8))
+        else { return ([:], []) }
+        return (a.addresses, a.exclude)
+    }
+
+    /** Pings connect to these addresses ({name: address}, from the extension) instead of looking the names up; [:] forgets them. */
+    static func setServerAddresses(_ addresses: [String: String]) {
+        let json = (try? JSONEncoder().encode(addresses)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        LibxraySetServerAddresses(json)
+    }
+
     /** The server's config with Xray's TUN inbound, the user's rules and traffic counters. */
     static func buildTunnelConfig(raw: String, options: TunnelOptions) throws -> String {
         let optionsJSON = String(decoding: try JSONEncoder().encode(options), as: UTF8.self)

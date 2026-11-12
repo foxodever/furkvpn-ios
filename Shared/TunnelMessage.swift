@@ -8,6 +8,10 @@ enum TunnelMessage: Codable {
     case reload(TunnelPayload?)
     /** The extension's state, a test request through its core and the core's recent log (Settings → Диагностика). */
     case debug(url: String)
+    /** The addresses the extension resolved the subscription's servers to ({name: address}), out of the tunnel's routes. */
+    case addresses
+    /** Check for white lists now (WhitelistCheck back, after it switched the server if it had to). */
+    case whitelist
 
     func encoded() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }
 
@@ -41,17 +45,31 @@ struct TunnelPayload: Codable {
     var serverName: String
     var config: String
     var routing: RoutingSettings
-    /** Where the extension posts its state every 5 s (Settings → Диагностика; temporary, for debugging). */
-    var debugUpload: String?
+    /** Debug mode (Settings → Диагностика): 15 s after the start the extension stops the tunnel with its report. */
+    var debugMode: Bool?
+    /**
+     * The server names and addresses of the whole subscription: the extension leaves them all out of the
+     * tunnel's routes, so the app's pings reach every server while the VPN is on.
+     */
+    var servers: [String]?
+    /**
+     * The host names of the white list check's sites (when it is on): out of the tunnel's routes as well, so
+     * the extension asks them directly while the VPN is on.
+     */
+    var probes: [String]?
 
     static let key = "payload"
 
-    /** The selected server, from the files of this process (or the shared ones). */
-    static func fromStore() -> TunnelPayload? {
+    /**
+     * The selected server, from the files of this process (or the shared ones). [debug] only for the start
+     * from the app: other starts and reloads never run the self-test.
+     */
+    static func fromStore(debug: Bool = false) -> TunnelPayload? {
         guard let info = Store.loadSubscription(), let server = Store.selectedEntry(in: info),
               let raw = Store.config(for: server.key) else { return nil }
         return TunnelPayload(serverKey: server.key, serverName: server.displayName, config: raw, routing: Store.routing,
-                             debugUpload: Store.debugUpload ? Store.debugUploadURL : nil)
+                             debugMode: debug ? true : nil, servers: Core.subscriptionServers(Store.allConfigs()),
+                             probes: Store.whitelistDetect ? Whitelist.hosts(Store.loadRemoteConfig()?.whitelist ?? WhitelistConfig()) : nil)
     }
 
     func encoded() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }

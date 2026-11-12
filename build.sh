@@ -19,6 +19,8 @@ xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Release \
 APP="$OUT/dd/Build/Products/Release-iphoneos/FurkVPN.app"
 rm -rf "$OUT/Payload" && mkdir -p "$OUT/Payload" && cp -R "$APP" "$OUT/Payload/"
 codesign -f -s - --entitlements FurkTunnel/FurkTunnel.entitlements "$OUT/Payload/FurkVPN.app/PlugIns/FurkTunnel.appex"
+# The Control Center button (no entitlements needed).
+codesign -f -s - "$OUT/Payload/FurkVPN.app/PlugIns/FurkWidget.appex"
 codesign -f -s - --entitlements FurkVPN/FurkVPN.entitlements "$OUT/Payload/FurkVPN.app"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$OUT/Payload/FurkVPN.app/Info.plist")
 (cd "$OUT" && rm -f FurkVPN-*.ipa && zip -qry "FurkVPN-$VERSION-unsigned.ipa" Payload)

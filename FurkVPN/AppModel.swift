@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UserNotifications
 
 enum Ping: Equatable {
     case testing
@@ -62,6 +63,29 @@ final class AppModel: ObservableObject {
     }
     /** The settings sheet; also opened from the menu (⌘, on a Mac or an iPad with a keyboard). */
     @Published var settingsOpen = false
+    /** The latest white list check (the card on the main screen), by the app or by the extension. */
+    @Published private(set) var whitelistCheck: WhitelistCheck?
+    @Published private(set) var whitelistChecking = false
+    /** Settings → «Определять белые списки». */
+    @Published var whitelistDetect: Bool {
+        didSet {
+            guard whitelistDetect != oldValue else { return }
+            Store.whitelistDetect = whitelistDetect
+            if whitelistDetect { checkWhitelist() }
+            // The check's sites go in or out of the tunnel's routes.
+            scheduleReload()
+        }
+    }
+    /** Settings → «Уведомлять об отключении VPN» (the permission is asked when it is turned on). */
+    @Published private(set) var notifyStops: Bool
+    /** Settings → «Переподключаться автоматически». */
+    @Published var autoReconnect: Bool {
+        didSet {
+            guard autoReconnect != oldValue else { return }
+            let on = autoReconnect
+            Task { await vpn.setAutoReconnect(on) }
+        }
+    }
 
     let vpn = VPNController()
     private var configFetchedAt = Date.distantPast
@@ -71,6 +95,10 @@ final class AppModel: ObservableObject {
     private var toastTask: Task<Void, Never>?
     /** Imports and refreshes of the subscription, one after another: a refresh never overwrites a new key. */
     private var subscriptionQueue: Task<Void, Never>?
+    private var whitelistTask: Task<Void, Never>?
+    /** The newest white list switch already told about. */
+    private var toldSwitchAt = Date()
+    private var sharedObserver: NSObjectProtocol?
 
     init() {
         config = Store.loadRemoteConfig()?.sanitized() ?? RemoteConfig()
@@ -80,8 +108,21 @@ final class AppModel: ObservableObject {
         routing = Store.routing
         subscriptionUpdateHours = Store.subscriptionUpdateHours
         serversOnLeft = Store.serversOnLeft
+        whitelistDetect = Store.whitelistDetect
+        whitelistCheck = Store.whitelistCheck
+        notifyStops = Store.notifyStops
+        autoReconnect = Store.autoReconnect
         vpn.onError = { [weak self] message in self?.show("Ошибка подключения: \(message)") }
         _ = PhysicalNetwork.shared // starts watching the network before the first ping
+        // Operators turn white lists on for mobile data: a new network is worth a check.
+        PhysicalNetwork.shared.onChange = { [weak self] in
+            Task { @MainActor in self?.networkChanged() }
+        }
+        // The extension checked for white lists and maybe moved the server.
+        SharedChange.observe()
+        sharedObserver = NotificationCenter.default.addObserver(forName: SharedChange.local, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.syncShared() }
+        }
         #if DEMO
         if Demo.on {
             config = Demo.config
@@ -120,6 +161,8 @@ final class AppModel: ObservableObject {
         lastResume = Date()
         let coldStart = !resumedBefore
         resumedBefore = true
+        syncShared()
+        if Date().timeIntervalSince(whitelistCheck?.time ?? .distantPast) > 60 { checkWhitelist() }
         Task {
             // On start the config is always fetched again; later only when older than an hour.
             if coldStart || Date().timeIntervalSince(configFetchedAt) > 3600 { await refreshConfig() }
@@ -302,6 +345,91 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: White lists
+
+    /**
+     * Checks for white lists now: without the VPN the app asks the sites itself; with it the extension does
+     * (only it gets past its tunnel to them) and moves the server if it has to. Nothing while connecting.
+     */
+    func checkWhitelist() {
+        guard whitelistDetect, whitelistTask == nil else { return }
+        #if DEMO
+        if Demo.on { return }
+        #endif
+        whitelistChecking = true
+        whitelistTask = Task {
+            defer {
+                whitelistChecking = false
+                whitelistTask = nil
+            }
+            if vpn.isConnected {
+                guard let data = await vpn.send(.whitelist), let check = try? JSONDecoder().decode(WhitelistCheck.self, from: data) else { return }
+                whitelistCheck = check
+                syncShared()
+            } else if vpn.state == .idle {
+                let config = self.config.whitelist
+                let network = PhysicalNetwork.shared.kind
+                var check = await Task.detached(priority: .userInitiated) { Whitelist.check(config, network: network) }.value
+                // The VPN came up meanwhile: the extension checks from now on.
+                guard vpn.state == .idle else { return }
+                if let target = Whitelist.apply(&check) {
+                    selectedKey = target.key
+                    toldSwitchAt = check.time
+                    show(check.status == .whitelist ? "Включены белые списки — переключили на \(target.displayName)"
+                        : "Белые списки выключены — вернули \(target.displayName)")
+                }
+                whitelistCheck = check
+            }
+        }
+    }
+
+    private var networkTask: Task<Void, Never>?
+
+    private func networkChanged() {
+        networkTask?.cancel()
+        networkTask = Task {
+            // Let the new network settle (and the extension restart its core on it).
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if !Task.isCancelled { checkWhitelist() }
+        }
+    }
+
+    /** What the extension may have changed: the selected server and the latest white list check. */
+    func syncShared() {
+        let saved = Store.selectedServer
+        if saved != selectedKey, saved != nil { selectedKey = saved }
+        guard let check = Store.whitelistCheck else { return }
+        if whitelistCheck.map({ check.time >= $0.time }) ?? true { whitelistCheck = check }
+        if let name = check.switchedTo, check.time > toldSwitchAt, Date().timeIntervalSince(check.time) < 600 {
+            toldSwitchAt = check.time
+            show(check.status == .whitelist ? "Включены белые списки — переключили на \(name)" : "Белые списки выключены — вернули \(name)")
+        }
+    }
+
+    /** While white lists are on, the ping button checks only the servers made for them (when there are any). */
+    var pingWhitelistOnly: Bool {
+        guard whitelistDetect, whitelistCheck?.status == .whitelist, let info = subscription else { return false }
+        return !Whitelist.pingKeys(info.servers, config: config.whitelist).isEmpty
+    }
+
+    // MARK: Notifications
+
+    /** Turns «Уведомлять об отключении VPN» on (asking iOS for permission) or off. */
+    func setNotifyStops(_ on: Bool) {
+        guard on else {
+            notifyStops = false
+            Store.notifyStops = false
+            return
+        }
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+            notifyStops = granted
+            Store.notifyStops = granted
+            if !granted { show("Разрешите уведомления FurkVPN в настройках iOS") }
+        }
+    }
+
     // MARK: Servers
 
     func select(_ key: String?, reconnect: Bool = true) {
@@ -333,10 +461,15 @@ final class AppModel: ObservableObject {
         pingTask?.cancel()
         pingRun += 1
         let run = pingRun
-        let servers = info.servers.filter(\.pingable)
+        var servers = info.servers.filter(\.pingable)
+        if pingWhitelistOnly {
+            let keys = Whitelist.pingKeys(info.servers, config: config.whitelist)
+            servers = servers.filter { keys.contains($0.key) }
+        }
         pinging = true
         for s in servers { pings[s.key] = .testing }
         pingTask = Task {
+            await self.useServerAddresses()
             await withTaskGroup(of: Void.self) { group in
                 for entry in servers {
                     group.addTask { @MainActor in
@@ -357,7 +490,23 @@ final class AppModel: ObservableObject {
     func pingServer(_ entry: ServerEntry) {
         guard entry.pingable, !measuring.contains(entry.key) else { return }
         pings[entry.key] = .testing
-        Task { await measure(entry) }
+        Task {
+            await useServerAddresses()
+            await measure(entry)
+        }
+    }
+
+    /**
+     * With the VPN on, a ping gets past the tunnel only to an address out of its routes: the tests connect to
+     * the addresses the extension resolved the servers to and left out (and don't look the names up through
+     * the tunnel). Without the VPN, or from an older extension that doesn't answer, the names are looked up.
+     */
+    private func useServerAddresses() async {
+        var addresses: [String: String] = [:]
+        if vpn.isConnected, let data = await vpn.send(.addresses) {
+            addresses = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        }
+        Core.setServerAddresses(addresses)
     }
 
     /**

@@ -2,6 +2,7 @@ package libxray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -162,7 +163,27 @@ type cachedLookup struct {
 var (
 	lookupMu    sync.Mutex
 	lookupCache = map[string]cachedLookup{}
+	// The addresses given by SetServerAddresses, by name.
+	serverAddresses = map[string]net.IP{}
 )
+
+// SetServerAddresses gives the delay tests the addresses the tunnel extension resolved the servers to
+// ({name: address}, from ResolveServers) while the VPN is on; "{}" forgets them. A test connects to the
+// address given here: past the tunnel it gets only to these, and the name isn't looked up through the
+// tunnel's DNS.
+func SetServerAddresses(addressesJSON string) {
+	var given map[string]string
+	_ = json.Unmarshal([]byte(addressesJSON), &given)
+	addresses := map[string]net.IP{}
+	for name, address := range given {
+		if ip := net.ParseIP(address); ip != nil && domainOf(name) != "" {
+			addresses[domainOf(name)] = ip
+		}
+	}
+	lookupMu.Lock()
+	serverAddresses = addresses
+	lookupMu.Unlock()
+}
 
 const (
 	lookupTTL     = 2 * time.Minute
@@ -172,11 +193,15 @@ const (
 // lookupServer resolves a server's domain name: through the plain DNS server the config lists it
 // under (the subscription template resolves its servers through 77.88.8.8 directly), then through
 // the phone's own DNS. The app is excluded from its VPN, so neither goes through a server. An IPv4
-// address is preferred.
+// address is preferred. An address given by SetServerAddresses comes before all of that.
 func lookupServer(cfg map[string]any, domain string) (net.IP, error) {
 	lookupMu.Lock()
+	given := serverAddresses[domain]
 	hit, ok := lookupCache[domain]
 	lookupMu.Unlock()
+	if given != nil {
+		return given, nil
+	}
 	if ok && time.Now().Before(hit.until) {
 		return hit.ip, nil
 	}

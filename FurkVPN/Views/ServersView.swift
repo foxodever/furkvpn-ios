@@ -135,7 +135,10 @@ struct ServerList: View {
                     }
                 }
             }
-            Section(footer: Text(Platform.isMac ? "Правый клик по серверу — проверить только его" : "Удерживайте сервер, чтобы проверить только его")) {}
+            Section(footer: VStack(alignment: .leading, spacing: 6) {
+                if model.pingWhitelistOnly { Text("Включены белые списки — пинг проверяет только серверы для обхода") }
+                Text(Platform.isMac ? "Правый клик по серверу — проверить только его" : "Удерживайте сервер, чтобы проверить только его")
+            }) {}
         }
         .listStyle(.insetGrouped)
         .paneBackground(inPane)

@@ -1,8 +1,8 @@
 import SwiftUI
 
 // Liquid Glass on iOS 26 (when built with Xcode 26), the flat look of the earlier versions elsewhere.
-// Glass is for what floats above the content and can be pressed: the connect button, the server
-// picker, the shortcuts, chips and messages. Text cards (plan, announcement) stay solid.
+// Glass is for what floats above the background: the connect button, the server picker, the cards of the
+// main screen (plan, announcement), the shortcuts, chips and messages.
 
 #if compiler(>=6.2)
 @available(iOS 26.0, *)

@@ -52,6 +52,15 @@ struct SettingsView: View {
                         }
                     }
                 }
+                Section(footer: Text("Проверяем сайты при смене сети и, если оператор включил белые списки, переключаем на «Автовыбор LTE»")) {
+                    Toggle("Определять белые списки", isOn: $model.whitelistDetect)
+                }
+                Section(footer: Text("Если iOS остановит VPN — из-за сбоя, смены сети или нехватки памяти, — придёт уведомление с причиной. Ещё уведомим, когда белые списки сменят сервер.")) {
+                    Toggle("Уведомлять об отключении VPN", isOn: Binding(get: { model.notifyStops }, set: { model.setNotifyStops($0) }))
+                }
+                Section(footer: Text("iOS сама подключит VPN снова, если он отключится не по вашей команде. Кнопка «Отключить» выключает и это.")) {
+                    Toggle("Переподключаться автоматически", isOn: $model.autoReconnect)
+                }
                 if wide {
                     Section(header: Text("Интерфейс"), footer: Text("Удобно левшам — на iPad и раскрытом iPhone Duo")) {
                         Toggle("Список серверов слева", isOn: $model.serversOnLeft)
@@ -140,7 +149,7 @@ private struct DiagnosticsView: View {
     /** What the running extension says about itself; nil when it doesn't run or answer. */
     @State private var core: String?
     @State private var loading = false
-    @State private var debugUpload = Store.debugUpload
+    @State private var debugMode = Store.debugMode
 
     private func loadCore() async {
         loading = true
@@ -177,9 +186,9 @@ private struct DiagnosticsView: View {
                 }
                 Button(loading ? "Загрузка…" : "Обновить") { Task { await loadCore() } }.disabled(loading)
             }
-            Section(footer: Text("Для отладки. Включите и подключите VPN: через 15 секунд он сам отключится и покажет отчёт расширения в «Последней ошибке» выше. Заодно расширение пробует отправить разработчику своё состояние, ошибки и порты соединений — без адресов сайтов. Потом выключите.")) {
-                Toggle("Режим отладки VPN", isOn: $debugUpload)
-                    .onChange(of: debugUpload) { Store.debugUpload = $0 }
+            Section(footer: Text("Для отладки. Включите и подключите VPN: через 15 секунд он сам отключится и покажет отчёт расширения в «Последней ошибке» выше. Режим действует на одно подключение и потом выключается сам.")) {
+                Toggle("Режим отладки VPN", isOn: $debugMode)
+                    .onChange(of: debugMode) { Store.debugMode = $0 }
             }
             Section {
                 Button("Скопировать всё") {

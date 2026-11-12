@@ -1,17 +1,17 @@
 import AppIntents
 import NetworkExtension
 
-// "Подключить", "Отключить", "Вкл/выкл" for Shortcuts, Siri, automations and the Action button:
-// they switch the VPN without opening the app (like the Android shortcuts for Samsung routines and
-// the Infinix button).
+// "Подключить", "Отключить", "Вкл/выкл", "Подключить к серверу" and "Статус VPN" for Shortcuts, Siri,
+// automations and the Action button: they work without opening the app (like the Android shortcuts for
+// Samsung routines and the Infinix button). The Control Center button is in ControlIntent.swift.
 
 @available(iOS 16.0, *)
-private struct IntentFailure: Error, CustomLocalizedStringResourceConvertible {
+struct IntentFailure: Error, CustomLocalizedStringResourceConvertible {
     var localizedStringResource: LocalizedStringResource
 }
 
 @available(iOS 16.0, *)
-private enum TunnelSwitch {
+enum TunnelSwitch {
     static func manager() async throws -> NETunnelProviderManager {
         let all = try await NETunnelProviderManager.loadAllFromPreferences()
         // The profile is created by the first connection in the app (iOS asks for permission there).
@@ -31,10 +31,35 @@ private enum TunnelSwitch {
             try await manager.saveToPreferences()
             try await manager.loadFromPreferences()
         }
+        if Store.autoReconnect != manager.isOnDemandEnabled {
+            VPNController.applyOnDemand(manager, on: Store.autoReconnect)
+            try await manager.saveToPreferences()
+            try await manager.loadFromPreferences()
+        }
         Store.setTunnelError(nil)
         var options: [String: NSObject] = [:]
         if let payload = TunnelPayload.fromStore() { options[TunnelPayload.key] = payload.encoded() as NSData }
         try manager.connection.startVPNTunnel(options: options)
+    }
+
+    /** Off, and stays off: an on-demand rule would start it again. */
+    static func turnOff(_ manager: NETunnelProviderManager) async throws {
+        if manager.isOnDemandEnabled {
+            manager.isOnDemandEnabled = false
+            try await manager.saveToPreferences()
+        }
+        manager.connection.stopVPNTunnel()
+    }
+
+    /** On when off, off when on or on the way: what the Shortcuts toggle and the Control Center button do. */
+    static func toggle() async throws -> Bool {
+        let manager = try await manager()
+        if isOn(manager) {
+            try await turnOff(manager)
+            return false
+        }
+        try await turnOn(manager)
+        return true
     }
 }
 
@@ -59,7 +84,7 @@ struct DisconnectVPNIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let manager = try await TunnelSwitch.manager()
-        manager.connection.stopVPNTunnel()
+        try await TunnelSwitch.turnOff(manager)
         return .result(dialog: "FurkVPN отключён")
     }
 }
@@ -71,13 +96,86 @@ struct ToggleVPNIntent: AppIntent {
     static let openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        let on = try await TunnelSwitch.toggle()
+        return .result(dialog: on ? "FurkVPN подключается…" : "FurkVPN отключён")
+    }
+}
+
+/** A server of the subscription, for "Подключить к серверу" (Shortcuts and Siri list them). */
+@available(iOS 16.0, *)
+struct ServerAppEntity: AppEntity {
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Сервер"
+    static let defaultQuery = ServerQuery()
+
+    var id: String
+    var name: String
+
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)") }
+
+    init(_ entry: ServerEntry) {
+        id = entry.key
+        name = entry.displayName
+    }
+}
+
+@available(iOS 16.0, *)
+struct ServerQuery: EntityQuery, EntityStringQuery {
+    private var servers: [ServerAppEntity] { (Store.loadSubscription()?.selectable ?? []).map(ServerAppEntity.init) }
+
+    func entities(for identifiers: [String]) async throws -> [ServerAppEntity] {
+        servers.filter { identifiers.contains($0.id) }
+    }
+
+    func entities(matching string: String) async throws -> [ServerAppEntity] {
+        servers.filter { $0.name.localizedCaseInsensitiveContains(string) }
+    }
+
+    func suggestedEntities() async throws -> [ServerAppEntity] { servers }
+}
+
+@available(iOS 16.0, *)
+struct ConnectToServerIntent: AppIntent {
+    static let title: LocalizedStringResource = "Подключить к серверу"
+    static let description = IntentDescription("Выбирает сервер FurkVPN и подключается к нему (или переключается, если VPN уже включён).")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Сервер")
+    var server: ServerAppEntity
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Подключить FurkVPN к \(\.$server)")
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
         let manager = try await TunnelSwitch.manager()
-        if TunnelSwitch.isOn(manager) {
-            manager.connection.stopVPNTunnel()
-            return .result(dialog: "FurkVPN отключён")
+        guard Store.loadSubscription()?.selectable.contains(where: { $0.key == server.id }) == true else {
+            throw IntentFailure(localizedStringResource: "Такого сервера больше нет в подписке")
         }
-        try await TunnelSwitch.turnOn(manager)
-        return .result(dialog: "FurkVPN подключается…")
+        Store.selectedServer = server.id
+        if TunnelSwitch.isOn(manager), let session = manager.connection as? NETunnelProviderSession,
+           manager.connection.status == .connected {
+            // The running tunnel moves to it, as when it is picked in the app.
+            try? session.sendProviderMessage(TunnelMessage.reload(TunnelPayload.fromStore()).encoded()) { _ in }
+        } else if !TunnelSwitch.isOn(manager) {
+            try await TunnelSwitch.turnOn(manager)
+        }
+        return .result(dialog: "FurkVPN: \(server.name)")
+    }
+}
+
+/** For automations: "if FurkVPN is on…". */
+@available(iOS 16.0, *)
+struct VPNStatusIntent: AppIntent {
+    static let title: LocalizedStringResource = "Статус VPN"
+    static let description = IntentDescription("Подключён ли FurkVPN: «Да» или «Нет», для условий в быстрых командах.")
+    static let openAppWhenRun = false
+
+    func perform() async throws -> some IntentResult & ReturnsValue<Bool> & ProvidesDialog {
+        let manager = try await TunnelSwitch.manager()
+        let on = manager.connection.status == .connected
+        var text = on ? "FurkVPN подключён" : "FurkVPN не подключён"
+        if on, let server = Store.loadSubscription().flatMap({ Store.selectedEntry(in: $0) }) { text += " — " + server.displayName }
+        return .result(value: on, dialog: "\(text)")
     }
 }
 
@@ -101,6 +199,18 @@ struct FurkShortcuts: AppShortcutsProvider {
             phrases: ["Отключи \(.applicationName)", "Выключи \(.applicationName)"],
             shortTitle: "Отключить",
             systemImageName: "lock.open"
+        )
+        AppShortcut(
+            intent: ConnectToServerIntent(),
+            phrases: ["Подключи \(.applicationName) к серверу", "Смени сервер \(.applicationName)"],
+            shortTitle: "Подключить к серверу",
+            systemImageName: "globe"
+        )
+        AppShortcut(
+            intent: VPNStatusIntent(),
+            phrases: ["Подключён ли \(.applicationName)", "Статус \(.applicationName)"],
+            shortTitle: "Статус VPN",
+            systemImageName: "info.circle"
         )
     }
 }

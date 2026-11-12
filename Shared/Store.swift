@@ -94,6 +94,13 @@ enum Store {
         return nil
     }
 
+    /** The raw configs of all the servers of the subscription. */
+    static func allConfigs() -> [String] {
+        // Before 1.1.0: a bare array.
+        if let configs = read([String].self, configsFile) { return configs }
+        return read(SavedConfigs.self, configsFile)?.configs ?? []
+    }
+
     /** The selected server, falling back to the first selectable one. */
     static func selectedEntry(in info: SubscriptionInfo?) -> ServerEntry? {
         guard let info else { return nil }
@@ -134,14 +141,41 @@ enum Store {
         set { defaults.set(newValue, forKey: "serversOnLeft") }
     }
 
-    /** Settings → Диагностика → send the extension's log to the developer (temporary, for debugging). */
-    static var debugUpload: Bool {
-        get { defaults.bool(forKey: "debugUpload") }
-        set { defaults.set(newValue, forKey: "debugUpload") }
+    /** Settings → Диагностика → «Режим отладки VPN», for the next connection only (VPNController.connect). */
+    static var debugMode: Bool {
+        get { defaults.bool(forKey: "debugMode") }
+        set { defaults.set(newValue, forKey: "debugMode") }
     }
 
-    /** A collector on the API server, only while the VPN on iPhones is being debugged. */
-    static let debugUploadURL = "http://54.36.51.149:18790/fv-dbg-7Qm2xK9p"
+    /** Settings → «Определять белые списки» (on by default, as on Android). */
+    static var whitelistDetect: Bool {
+        get { defaults.object(forKey: "whitelistDetect") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "whitelistDetect") }
+    }
+
+    /** The server a white list check switched to, to switch back from it when white lists are off. */
+    static var whitelistAutoSwitched: String? {
+        get { defaults.string(forKey: "whitelistAutoSwitched") }
+        set { defaults.set(newValue, forKey: "whitelistAutoSwitched") }
+    }
+
+    /** The latest white list check, by the app or the extension. */
+    static var whitelistCheck: WhitelistCheck? {
+        get { defaults.data(forKey: "whitelistCheck").flatMap { try? decoder.decode(WhitelistCheck.self, from: $0) } }
+        set { defaults.set(newValue.flatMap { try? encoder.encode($0) }, forKey: "whitelistCheck") }
+    }
+
+    /** Settings → «Уведомлять об отключении VPN»: the extension tells when the VPN stops by itself or changes the server. */
+    static var notifyStops: Bool {
+        get { defaults.bool(forKey: "notifyStops") }
+        set { defaults.set(newValue, forKey: "notifyStops") }
+    }
+
+    /** Settings → «Переподключаться автоматически»: iOS brings the VPN back (on demand) until it is turned off. */
+    static var autoReconnect: Bool {
+        get { defaults.bool(forKey: "autoReconnect") }
+        set { defaults.set(newValue, forKey: "autoReconnect") }
+    }
 
     /** The last error of the tunnel extension, for the app to show. */
     static func setTunnelError(_ message: String?) {
@@ -156,5 +190,25 @@ enum Store {
         guard let dict = defaults.dictionary(forKey: "tunnelError"), let message = dict["message"] as? String,
               let at = dict["at"] as? Double, at >= since.timeIntervalSince1970 - 1 else { return nil }
         return message
+    }
+}
+
+/**
+ * The extension changed the shared settings (a white list check moved the server): a Darwin notification,
+ * the one signal that gets from the extension to a running app. The app sees it as [local].
+ */
+enum SharedChange {
+    private static let name = "com.furkvpn.app.shared-changed"
+    static let local = Notification.Name("com.furkvpn.app.shared-changed")
+
+    static func post() {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(name as CFString), nil, nil, true)
+    }
+
+    /** Once, in the app: forwards the extension's signal to NotificationCenter.default. */
+    static func observe() {
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            NotificationCenter.default.post(name: SharedChange.local, object: nil)
+        }, name as CFString, nil, .deliverImmediately)
     }
 }
