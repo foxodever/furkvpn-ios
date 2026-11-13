@@ -114,19 +114,21 @@ struct ServerList: View {
     var body: some View {
         List {
             if !filters.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    GlassGroup(spacing: 8) {
-                        HStack(spacing: 8) {
-                            chip("Все", selected: filter == nil) { filter = nil }
-                            ForEach(filters, id: \.self) { f in
-                                chip("\(f.emoji) \(f.title)", selected: filter == f.emoji) { filter = f.emoji }
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        GlassGroup(spacing: 8) {
+                            HStack(spacing: 8) {
+                                chip("Все", selected: filter == nil) { filter = nil }
+                                ForEach(filters, id: \.self) { f in
+                                    chip("\(f.emoji) \(f.title)", selected: filter == f.emoji) { filter = f.emoji }
+                                }
                             }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .listRowBackground(Color.clear)
                 }
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                .listRowBackground(Color.clear)
             }
             ForEach(sections) { section in
                 Section(header: section.title.map { Text($0) }) {
@@ -141,8 +143,9 @@ struct ServerList: View {
             }) {}
         }
         .listStyle(.insetGrouped)
+        .compactSections()
         .paneBackground(inPane)
-        .refreshable { model.refreshSubscription(showMessage: true) }
+        .refreshable { await model.refreshSubscriptionNow(showMessage: true) }
         .task {
             // The first look at the list checks the servers, like the Android app.
             if model.pings.isEmpty { model.testPings() }
@@ -191,6 +194,19 @@ private extension Color {
 }
 
 private extension View {
+    /**
+     * insetGrouped leaves a big gap above the first section and between sections (the tabs under the title
+     * and the list under the tabs stood far apart): tighter from iOS 17.
+     */
+    @ViewBuilder
+    func compactSections() -> some View {
+        if #available(iOS 17.0, *) {
+            self.listSectionSpacing(.compact).contentMargins(.top, 6, for: .scrollContent)
+        } else {
+            self
+        }
+    }
+
     /** The pane's own color behind the list (iOS 16+; before, the list keeps its grouped background). */
     @ViewBuilder
     func paneBackground(_ inPane: Bool) -> some View {

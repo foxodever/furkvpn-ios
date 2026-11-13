@@ -119,7 +119,20 @@ enum Whitelist {
 
     /** "wifi", "cellular", "ethernet", "other" or "none" for the check's details. */
     static func networkKind(_ path: Network.NWPath) -> String {
-        guard path.status == .satisfied else { return "none" }
+        guard path.status == .satisfied else {
+            // The tunnel's extension sees its path "unsatisfied" while the tunnel is up, whatever the network:
+            // an interface of the phone's with an address tells it then (Wi-Fi that is on but not joined has none).
+            let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
+            let listed = path.availableInterfaces.filter { physical.contains($0.type) }
+            let usable = Set(LibxrayUsableInterfaces(listed.map(\.name).joined(separator: ",")).split(separator: ",").map(String.init))
+            let online = listed.filter { usable.contains($0.name) }
+            guard let first = online.first(where: { path.usesInterfaceType($0.type) }) ?? online.first else { return "none" }
+            switch first.type {
+            case .wifi: return "wifi"
+            case .cellular: return "cellular"
+            default: return "ethernet"
+            }
+        }
         if path.usesInterfaceType(.wifi) { return "wifi" }
         if path.usesInterfaceType(.cellular) { return "cellular" }
         if path.usesInterfaceType(.wiredEthernet) { return "ethernet" }

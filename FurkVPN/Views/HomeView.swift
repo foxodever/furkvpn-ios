@@ -19,7 +19,7 @@ struct HomeView: View {
                         ScrollView {
                             homeColumn.padding(.horizontal, 20)
                         }
-                        .refreshable { model.refreshSubscription(showMessage: true) }
+                        .refreshable { await model.refreshSubscriptionNow(showMessage: true) }
                     }
                 }
                 .onAppear {
@@ -51,7 +51,7 @@ struct HomeView: View {
             SettingsView(wide: wide).environmentObject(model).environmentObject(vpn)
         }
         .sheet(isPresented: $showSupport) {
-            SupportSheet(contacts: model.config.support, subscriptionSupport: model.subscription?.supportUrl)
+            SupportSheet(contacts: model.config.support, subscriptionSupport: model.subscription?.supportUrl, links: model.config.links)
         }
         .sheet(isPresented: $showProxies) {
             TelegramProxiesSheet(proxies: model.config.telegramProxies)
@@ -68,7 +68,7 @@ struct HomeView: View {
             ScrollView {
                 homeColumn
             }
-            .refreshable { model.refreshSubscription(showMessage: true) }
+            .refreshable { await model.refreshSubscriptionNow(showMessage: true) }
             .frame(maxWidth: .infinity)
             if !model.serversOnLeft { ServersPane().frame(maxWidth: .infinity) }
         }

@@ -25,7 +25,11 @@ private extension WhitelistStatus {
 /** Hidden when the detection is off in Settings. */
 struct WhitelistCard: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var vpn: VPNController
     @State private var details = false
+
+    /** Another app's VPN, while ours is off (connecting ours turns it off). */
+    private var otherVPN: Bool { model.otherVPN && vpn.state == .idle }
 
     var body: some View {
         if model.whitelistDetect {
@@ -33,14 +37,18 @@ struct WhitelistCard: View {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Белые списки").font(.headline)
-                        Text(status.text)
+                        Text(otherVPN ? "Включён другой VPN — проверка не покажет, что блокирует оператор" : status.text)
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(otherVPN ? .orange : .secondary)
                             .wraps()
                         Text("Подробнее").font(.subheadline.weight(.semibold)).foregroundColor(.accentColor).padding(.top, 2)
                     }
                     Spacer()
-                    StatusDot(status: status, checking: model.whitelistChecking)
+                    if otherVPN {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).frame(width: 24, height: 24)
+                    } else {
+                        StatusDot(status: status, checking: model.whitelistChecking)
+                    }
                 }
                 .foregroundColor(.primary)
                 .card()
@@ -48,7 +56,7 @@ struct WhitelistCard: View {
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $details) {
-                WhitelistSheet().environmentObject(model)
+                WhitelistSheet().environmentObject(model).environmentObject(vpn)
             }
         }
     }
@@ -75,6 +83,7 @@ private struct StatusDot: View {
 /** When the sites were checked, how each one answered, and that it was done without the VPN. */
 private struct WhitelistSheet: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var vpn: VPNController
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -82,6 +91,14 @@ private struct WhitelistSheet: View {
         let status = check?.status ?? .unknown
         NavigationView {
             List {
+                if model.otherVPN && vpn.state == .idle {
+                    Section {
+                        Label("Включён другой VPN. Пока он работает, сайты открываются через него, и проверка не покажет, что блокирует оператор. Выключите его или подключите FurkVPN — тогда проверит наш VPN.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline)
+                            .foregroundColor(.orange)
+                    }
+                }
                 Section {
                     HStack(spacing: 12) {
                         StatusDot(status: status, checking: false)

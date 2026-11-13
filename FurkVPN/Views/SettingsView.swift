@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var changeKey = false
     @State private var manual = false
     @State private var scanningTv = false
+    @AppStorage(GlassStyle.key, store: Store.defaults) private var glassStyle = GlassStyle.liquid.rawValue
 
     var body: some View {
         NavigationView {
@@ -24,6 +25,7 @@ struct SettingsView: View {
                             if model.refreshing { ProgressView() }
                         }
                     }
+                    .disabled(model.refreshing)
                     Picker("Автообновление подписки", selection: $model.subscriptionUpdateHours) {
                         ForEach(UpdateInterval.choices, id: \.self) { hours in
                             Text(intervalTitle(hours)).tag(hours)
@@ -61,9 +63,14 @@ struct SettingsView: View {
                 Section(footer: Text("iOS сама подключит VPN снова, если он отключится не по вашей команде. Кнопка «Отключить» выключает и это.")) {
                     Toggle("Переподключаться автоматически", isOn: $model.autoReconnect)
                 }
-                if wide {
-                    Section(header: Text("Интерфейс"), footer: Text("Удобно левшам — на iPad и раскрытом iPhone Duo")) {
-                        Toggle("Список серверов слева", isOn: $model.serversOnLeft)
+                if wide || GlassStyle.available {
+                    Section(header: Text("Интерфейс"), footer: interfaceFooter) {
+                        if GlassStyle.available {
+                            Picker("Стекло", selection: $glassStyle) {
+                                ForEach(GlassStyle.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                            }
+                        }
+                        if wide { Toggle("Список серверов слева", isOn: $model.serversOnLeft) }
                     }
                 }
                 Section(header: Text("Диагностика")) {
@@ -123,6 +130,15 @@ struct SettingsView: View {
             .toast($model.toast)
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var interfaceFooter: Text {
+        var lines: [String] = []
+        if GlassStyle.available {
+            lines.append("Жидкое стекло само следует настройке iOS: «Прозрачное» или «Тонированное» в iOS 26, ползунок прозрачности в iOS 27, «Понижение прозрачности». Матовое — размытие без преломления, без стекла — плоские карточки и кнопки.")
+        }
+        if wide { lines.append("Список серверов слева удобен левшам — на iPad и раскрытом iPhone Duo.") }
+        return Text(lines.joined(separator: "\n\n"))
     }
 
     private var updatedAt: some View {

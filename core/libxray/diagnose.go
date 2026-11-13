@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,6 +235,58 @@ func InterfaceSummary() string {
 	}
 	if len(parts) == 0 {
 		return "нет интерфейсов с адресом"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// NetworkSignature tells one of the phone's networks from another, for the tunnel to notice a new one
+// even where iOS reports its path as unsatisfied (as it does to the tunnel's extension once the tunnel is
+// up): the Wi-Fi or Ethernet interfaces ("en…") with their IPv4 addresses, or, when none has an address,
+// cellular ("pdp_ip0") — which stays up under Wi-Fi and would otherwise make its changes look like a new
+// network. A global IPv6 address only as "+IPv6": iOS rotates the temporary ones. "" without a network.
+// "en0 192.168.1.5", "pdp_ip0 10.1.2.3 +IPv6".
+func NetworkSignature() string {
+	list, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	addresses := map[string][]net.IP{}
+	for _, ifi := range list {
+		if ips := interfaceAddresses(ifi.Name); len(ips) > 0 {
+			addresses[ifi.Name] = ips
+		}
+	}
+	return networkSignature(addresses)
+}
+
+func networkSignature(addresses map[string][]net.IP) string {
+	var names []string
+	for name := range addresses {
+		if digits := strings.TrimPrefix(name, "en"); digits != name && digits != "" && strings.Trim(digits, "0123456789") == "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 && len(addresses["pdp_ip0"]) > 0 {
+		names = []string{"pdp_ip0"}
+	}
+	var parts []string
+	for _, name := range names {
+		var v4 []string
+		v6 := false
+		for _, ip := range addresses[name] {
+			if ip.To4() != nil {
+				v4 = append(v4, ip.String())
+			} else {
+				v6 = true
+			}
+		}
+		sort.Strings(v4)
+		part := strings.TrimSpace(name + " " + strings.Join(v4, ","))
+		if v6 {
+			part += " +IPv6"
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, " · ")
 }

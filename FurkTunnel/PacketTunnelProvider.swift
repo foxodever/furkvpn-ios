@@ -64,10 +64,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * routes, and nothing goes direct.
      */
     private var compat = false
-    private var startedAt = Date()
-    private var pathKey: String?
-    private var pathSatisfied = true
+    /**
+     * The network the core was last started on (`LibxrayNetworkSignature`: the phone's interfaces with their
+     * addresses), "" with none. Not the path from iOS: with the tunnel up it is "unsatisfied" for this extension
+     * whatever the network, so Wi-Fi ↔ mobile went unnoticed and the core kept going out the old way.
+     */
+    private var networkSignature = ""
+    /** A new network waiting to settle. */
+    private var settlingSignature: String?
     private var networkWork: DispatchWorkItem?
+    /** Looks for a new network every few seconds: iOS may not report the path again when it changes. */
+    private var networkTimer: DispatchSourceTimer?
     private var healthTimer: DispatchSourceTimer?
     /** Moves the "VPN stopped" notification on while this process lives (StopNotices). */
     private var watchdogTimer: DispatchSourceTimer?
@@ -94,6 +101,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let tunIPv6 = "fdfe:dcba:9876::1"
     private static let mtu = 1500
     private static let networkSettle: TimeInterval = 3
+    private static let networkPoll = 5
     private static let autoCheckInterval = 10
     private static let healthRestartMin: TimeInterval = 120
     private static let longSleep: TimeInterval = 5 * 60
@@ -129,8 +137,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         self.payload = payload
-        startedAt = Date()
         // The phone's network first: the core binds its connections to it.
+        networkSignature = LibxrayNetworkSignature()
+        LibxrayDebugNote("network: \(networkSignature.isEmpty ? "none" : networkSignature)")
         startPathMonitor()
         LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
         // Debug mode: does this process reach the network at all, before there is a tunnel to go into?
@@ -444,6 +453,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         watchdog.setEventHandler { StopNotices.arm() }
         watchdog.resume()
         watchdogTimer = watchdog
+        let network = DispatchSource.makeTimerSource(queue: queue)
+        network.schedule(deadline: .now() + .seconds(Self.networkPoll), repeating: .seconds(Self.networkPoll))
+        network.setEventHandler { [weak self] in self?.checkNetwork() }
+        network.resume()
+        networkTimer = network
         let whitelist = DispatchSource.makeTimerSource(queue: whitelistQueue)
         whitelist.schedule(deadline: .now() + .seconds(Self.whitelistInterval), repeating: .seconds(Self.whitelistInterval))
         whitelist.setEventHandler { [weak self] in _ = self?.checkWhitelistNow() }
@@ -458,6 +472,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         healthTimer = nil
         networkWork?.cancel()
         networkWork = nil
+        networkTimer?.cancel()
+        networkTimer = nil
         watchdogTimer?.cancel()
         watchdogTimer = nil
         whitelistTimer?.cancel()
@@ -468,43 +484,55 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    /**
-     * Wi-Fi ↔ mobile or another network: connections to the servers made on the old network are
-     * dead but would hang for minutes (and auto-select's checks with them), so the core starts afresh.
-     */
+    /** iOS reports the path again: what it says is kept, and a new network looked for. Runs on [queue]. */
     private func networkChanged(_ path: Network.NWPath) {
-        pathSatisfied = path.status == .satisfied
-        let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
-        let interfaces: [NWInterface] = path.availableInterfaces.filter { physical.contains($0.type) }
+        notePath(path)
+        checkNetwork()
+    }
+
+    /** The interfaces to bind the core to, best first, and the path for the debug report. Must run on [queue]. */
+    private func notePath(_ path: Network.NWPath) {
         physicalInterfaces = Core.physicalInterfaces(path)
         lastPath = path
-        let status = pathSatisfied ? "\(path.status)" : "\(path.status) (\(path.unsatisfiedReason))"
+        let status = path.status == .satisfied ? "\(path.status)" : "\(path.status) (\(path.unsatisfiedReason))"
         let listed = path.availableInterfaces.map { "\($0.name) \($0.type)" }.joined(separator: ", ")
         let types: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet, .other]
         let used = types.filter { path.usesInterfaceType($0) }.map { "\($0)" }.joined(separator: "/")
         pathInfo = "\(status), интерфейсы \(listed), идёт через \(used)"
-        // Wi-Fi ↔ cellular, or another interface to bind the core to; not the order of the rest.
-        var names: Set<String> = []
-        for interface in interfaces {
-            names.insert("\(interface.type)")
-        }
-        let key: String = path.status == .satisfied ? names.sorted().joined(separator: ",") + " @" + (physicalInterface ?? "") : ""
-        LibxrayDebugNote("network: \(key.isEmpty ? "none" : key)")
-        // The tunnel coming up makes iOS report the path again: that is the same network.
-        guard let previous = pathKey, Date().timeIntervalSince(startedAt) > 10 else {
-            pathKey = key // the network the tunnel was started on
+    }
+
+    /**
+     * Wi-Fi ↔ mobile or another network: connections to the servers made on the old network are dead but
+     * would hang for minutes (and auto-select's checks with them). Once the new network has settled, the tunnel
+     * gets its settings again — the routes left out of it (the servers' addresses, all this extension can reach
+     * past its tunnel) stayed on the old network: nothing worked until the VPN was turned off — and the core
+     * starts afresh on it. Must run on [queue].
+     */
+    private func checkNetwork() {
+        let now = LibxrayNetworkSignature()
+        guard now != networkSignature else {
+            settlingSignature = nil
+            networkWork?.cancel()
+            networkWork = nil
             return
         }
-        guard key != previous else { return }
-        pathKey = key
+        guard now != settlingSignature else { return }
+        settlingSignature = now
         networkWork?.cancel()
-        guard !key.isEmpty else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.pathKey == key, self.running else { return }
-            self.probeNetwork() // which interface gets out on the new network
-            self.restartCore("network changed")
-            // Operators turn white lists on for mobile data: a new network is worth a check.
-            self.scheduleWhitelistCheck(after: 2)
+            guard let self else { return }
+            self.settlingSignature = nil
+            // Still changing, or the core is not up yet: the next check looks again.
+            guard self.running, LibxrayNetworkSignature() == now else { return }
+            self.networkSignature = now
+            LibxrayDebugNote("network: \(now.isEmpty ? "none" : now)")
+            // No network: the next one gets the new settings, even if it is the same one again.
+            guard !now.isEmpty else { return }
+            if let path = self.monitor?.currentPath { self.notePath(path) }
+            self.reload(nil, newNetwork: true) {
+                // Operators turn white lists on for mobile data: a new network is worth a check.
+                self.scheduleWhitelistCheck(after: 2)
+            }
         }
         networkWork = work
         queue.asyncAfter(deadline: .now() + Self.networkSettle, execute: work)
@@ -531,7 +559,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         queue.async { [weak self] in
             guard let self, self.running, self.serverKey == key else { return }
             if !check.best.isEmpty { self.autoBest = (key, check.best, Date()) }
-            guard check.restart, self.pathSatisfied else { return }
+            guard check.restart, !self.networkSignature.isEmpty else { return }
             guard Date().timeIntervalSince(self.lastHealthRestart) >= Self.healthRestartMin else { return }
             self.lastHealthRestart = Date()
             self.restartCore("auto-select servers stopped answering")
@@ -614,8 +642,38 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    /** Starts the core again with [next] (the server or the settings changed), with new routes when needed. Must run on [queue]. */
-    private func reload(_ next: TunnelPayload?, done: @escaping () -> Void) {
+    /** A reload is applying new routes; reloads that come meanwhile wait and run as one, with the newest payload. */
+    private var reloading = false
+    private var queuedReload: (next: TunnelPayload?, newNetwork: Bool, done: [() -> Void])?
+
+    /**
+     * Starts the core again with [next] (the server or the settings changed), with new routes when needed.
+     * One at a time: a second one while new routes are being applied used to overlap it, and a burst of them
+     * (subscription updates pressed again and again) left the tunnel stuck "reconnecting". [newNetwork]: the
+     * phone is on another network — the routes again, and which way gets out on it. Must run on [queue].
+     */
+    private func reload(_ next: TunnelPayload?, newNetwork: Bool = false, done: @escaping () -> Void) {
+        if reloading {
+            var queued = queuedReload ?? (next: nil, newNetwork: false, done: [])
+            if let next { queued.next = next }
+            queued.newNetwork = queued.newNetwork || newNetwork
+            queued.done.append(done)
+            queuedReload = queued
+            return
+        }
+        reloading = true
+        applyReload(next, newNetwork: newNetwork) {
+            self.reloading = false
+            done()
+            if let queued = self.queuedReload {
+                self.queuedReload = nil
+                self.reload(queued.next, newNetwork: queued.newNetwork) { queued.done.forEach { $0() } }
+            }
+        }
+    }
+
+    /** Must run on [queue]; [done] is called on it. */
+    private func applyReload(_ next: TunnelPayload?, newNetwork: Bool, done: @escaping () -> Void) {
         guard running else {
             done()
             return
@@ -624,25 +682,35 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let next { payload = next }
         let lanDirect = Self.lanDirect(payload?.routing ?? RoutingSettings())
         // Another server: its addresses (the name servers it was looked up with are out of the routes already).
-        // The subscription's are as resolved at the start: usually the new server's are among them.
+        // The subscription's are as resolved at the start: usually the new server's are among them. Not on a new
+        // network alone: until the tunnel has its settings again the name servers may be out of reach, and a
+        // lookup that fails would drop the server's addresses from what stays out of the routes.
         let previous = Set(excluded)
-        if let config = payload?.config { pinned = Core.pinTunnelServers(config) }
+        if let next { pinned = Core.pinTunnelServers(next.config) }
         // White list detection turned on or off: its sites in or out of the routes.
         if let next, (next.probes ?? []) != probesBefore {
             subscription = Core.resolveServers((next.servers ?? []) + (next.probes ?? []))
         }
-        guard lanDirect != routesLanDirect || Set(excluded) != previous else {
+        guard newNetwork || lanDirect != routesLanDirect || Set(excluded) != previous else {
             restartCore("settings changed")
             done()
             return
         }
-        // New routes for the tunnel ("LAN directly" or the servers changed), then the core on them.
+        // New routes for the tunnel ("LAN directly", the servers or the network changed), then the core on them.
         routesLanDirect = lanDirect
         reasserting = true
         setTunnelNetworkSettings(tunnelSettings()) { _ in
             self.queue.async {
-                if let fd = Self.findTunnelDescriptor() { self.tunFd = fd }
-                self.restartCore("routes changed")
+                // The tunnel's descriptor stays the same; look for it again only if it is gone, and with the core
+                // stopped: the core works on a copy of it (Xray dups it, maybe to a lower number), and a search
+                // while it runs could take that copy, which the restart closes — "bad file descriptor" (seen on a Mac).
+                self.stopCore()
+                if Self.interfaceName(self.tunFd) == nil, let fd = Self.findTunnelDescriptor() { self.tunFd = fd }
+                // Another network: which way gets out on it (compatibility mode, the interface to bind to).
+                if newNetwork { self.probeNetwork() }
+                self.restartCore(newNetwork ? "network changed" : "routes changed")
+                // restartCore leaves it on when there is no tunnel to start on.
+                self.reasserting = false
                 done()
             }
         }

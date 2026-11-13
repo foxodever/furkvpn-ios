@@ -12,8 +12,8 @@ extension Color {
 }
 
 /**
- * Rounded block of the main screen, like the Android cards: glass on iOS 26, as the server card and the
- * buttons around it, a solid card before. Another color than the usual card's (the plan ran out) tints the glass.
+ * Rounded block of the main screen, like the Android cards: glass tinted with the card's color on iOS 26 (the
+ * same color wherever the card is on the screen), a solid card before. The plan that ran out is red.
  */
 struct CardBackground: ViewModifier {
     var color: Color = .card
@@ -22,7 +22,7 @@ struct CardBackground: ViewModifier {
         content
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), tint: color == .card ? nil : color, fallback: color)
+            .cardSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), color: color)
     }
 }
 
@@ -84,11 +84,9 @@ struct ToastOverlay: ViewModifier {
     }
 
     /** Dark text on the glass of iOS 26, light text on the accent capsule before. */
+    /** On glass (liquid or matte) the message is in the text color; on the flat accent capsule, in its contrast color. */
     private var toastText: Color {
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) { return .primary }
-        #endif
-        return .onAccent
+        GlassStyle.current == .flat ? .onAccent : .primary
     }
 }
 
@@ -227,7 +225,28 @@ struct ServerTitle: View {
 struct SupportSheet: View {
     let contacts: [SupportContact]
     let subscriptionSupport: String?
+    /** The main screen's links ("Наш бот"): the subscription's support link is usually one of them. */
+    var links: [AppLink] = []
     @Environment(\.dismiss) private var dismiss
+
+    /** The subscription's own support link, unless it is a contact above or a link of the main screen already. */
+    private var extraSupport: String? {
+        guard let subscriptionSupport else { return nil }
+        let known = contacts.map(\.url) + links.map(\.url)
+        return known.contains { Self.sameLink($0, subscriptionSupport) } ? nil : subscriptionSupport
+    }
+
+    /** "https://t.me/FurkVPNbot/" and "http://t.me/furkvpnbot?start=app" are the same place. */
+    private static func sameLink(_ a: String, _ b: String) -> Bool {
+        func key(_ s: String) -> String {
+            var v = s.trimmingCharacters(in: .whitespaces).lowercased()
+            if let r = v.range(of: "://") { v = String(v[r.upperBound...]) }
+            v = String(v.prefix { $0 != "?" && $0 != "#" })
+            while v.hasSuffix("/") { v.removeLast() }
+            return v.hasPrefix("www.") ? String(v.dropFirst(4)) : v
+        }
+        return key(a) == key(b)
+    }
 
     var body: some View {
         NavigationView {
@@ -240,8 +259,8 @@ struct SupportSheet: View {
                             Label(contact.title, systemImage: icon(contact.type))
                         }
                     }
-                    if let subscriptionSupport, !contacts.contains(where: { $0.url == subscriptionSupport }) {
-                        Button { openLink(subscriptionSupport) } label: { Label("Поддержка подписки", systemImage: "questionmark.circle") }
+                    if let extraSupport {
+                        Button { openLink(extraSupport) } label: { Label("Поддержка подписки", systemImage: "questionmark.circle") }
                     }
                 }
             }

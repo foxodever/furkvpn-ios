@@ -66,6 +66,8 @@ final class AppModel: ObservableObject {
     /** The latest white list check (the card on the main screen), by the app or by the extension. */
     @Published private(set) var whitelistCheck: WhitelistCheck?
     @Published private(set) var whitelistChecking = false
+    /** Another app's VPN is on (ours is off): the app's check would go through it, so there is none. */
+    @Published private(set) var otherVPN = false
     /** Settings → «Определять белые списки». */
     @Published var whitelistDetect: Bool {
         didSet {
@@ -96,6 +98,8 @@ final class AppModel: ObservableObject {
     /** Imports and refreshes of the subscription, one after another: a refresh never overwrites a new key. */
     private var subscriptionQueue: Task<Void, Never>?
     private var whitelistTask: Task<Void, Never>?
+    /** An update the user asked for is queued or running: the next request waits for it to end. */
+    private var refreshRequested = false
     /** The newest white list switch already told about. */
     private var toldSwitchAt = Date()
     private var sharedObserver: NSObjectProtocol?
@@ -300,14 +304,28 @@ final class AppModel: ObservableObject {
     }
 
     func refreshSubscription(showMessage: Bool) {
-        Task {
-            do {
-                try await enqueue { [weak self] in try await self?.refreshNow() }
-                if let url = subscription?.url { await refreshAccount(url, force: true) }
-                if showMessage { show("Подписка обновлена") }
-            } catch {
-                show((error as? LocalizedError)?.errorDescription ?? "Не удалось загрузить подписку.")
-            }
+        Task { await refreshSubscriptionNow(showMessage: showMessage) }
+    }
+
+    /**
+     * The update the user asked for (button, pull to refresh, menu); returns when it is done. Pressed again
+     * meanwhile it does nothing: every update queued after another one rebuilt the tunnel again, and a pile
+     * of them left it stuck "reconnecting".
+     */
+    func refreshSubscriptionNow(showMessage: Bool) async {
+        guard !refreshRequested else { return }
+        refreshRequested = true
+        refreshing = true
+        defer {
+            refreshRequested = false
+            refreshing = false
+        }
+        do {
+            try await enqueue { [weak self] in try await self?.refreshNow() }
+            if let url = subscription?.url { await refreshAccount(url, force: true) }
+            if showMessage { show("Подписка обновлена") }
+        } catch {
+            show((error as? LocalizedError)?.errorDescription ?? "Не удалось загрузить подписку.")
         }
     }
 
@@ -362,11 +380,17 @@ final class AppModel: ObservableObject {
                 whitelistChecking = false
                 whitelistTask = nil
             }
+            otherVPN = false
             if vpn.isConnected {
                 guard let data = await vpn.send(.whitelist), let check = try? JSONDecoder().decode(WhitelistCheck.self, from: data) else { return }
                 whitelistCheck = check
                 syncShared()
             } else if vpn.state == .idle {
+                // Sites through someone else's VPN all answer: no check, and no server switched on it.
+                if !OtherVPN.interfaces().isEmpty {
+                    otherVPN = true
+                    return
+                }
                 let config = self.config.whitelist
                 let network = PhysicalNetwork.shared.kind
                 var check = await Task.detached(priority: .userInitiated) { Whitelist.check(config, network: network) }.value
@@ -388,9 +412,10 @@ final class AppModel: ObservableObject {
     private func networkChanged() {
         networkTask?.cancel()
         networkTask = Task {
-            // Let the new network settle (and the extension restart its core on it).
+            // Let the new network settle. With the VPN on the extension checks by itself once the tunnel is on
+            // the new network: asked now, it would answer from the old one ("nothing works").
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if !Task.isCancelled { checkWhitelist() }
+            if !Task.isCancelled, !vpn.isConnected { checkWhitelist() }
         }
     }
 
