@@ -48,8 +48,8 @@ func TestNetworkSignature(t *testing.T) {
 		addresses map[string][]net.IP
 		want      string
 	}{
-		{"wifi, cellular under it left out", map[string][]net.IP{"en0": ip("192.168.1.5", "2a00::5"), "pdp_ip0": ip("10.1.2.3"), "utun4": ip("172.19.0.1")}, "en0 192.168.1.5 +IPv6"},
-		{"cellular", map[string][]net.IP{"pdp_ip0": ip("10.1.2.3", "2a00::7"), "pdp_ip1": ip("2a00::8"), "utun4": ip("172.19.0.1")}, "pdp_ip0 10.1.2.3 +IPv6"},
+		{"wifi, cellular under it left out", map[string][]net.IP{"en0": ip("192.168.1.5", "2a00::5"), "pdp_ip0": ip("10.1.2.3"), "utun4": ip("172.19.0.1")}, "en0 192.168.1.5"},
+		{"cellular", map[string][]net.IP{"pdp_ip0": ip("10.1.2.3", "2a00::7"), "pdp_ip1": ip("2a00::8"), "utun4": ip("172.19.0.1")}, "pdp_ip0 10.1.2.3"},
 		{"cellular, IPv6 only", map[string][]net.IP{"pdp_ip0": ip("2a00::7")}, "pdp_ip0 +IPv6"},
 		{"two en, sorted", map[string][]net.IP{"en1": ip("10.0.0.2"), "en0": ip("192.168.1.5", "192.168.1.4")}, "en0 192.168.1.4,192.168.1.5 · en1 10.0.0.2"},
 		{"not en", map[string][]net.IP{"enx": ip("10.0.0.2"), "bridge100": ip("172.20.10.1")}, ""},
@@ -59,5 +59,15 @@ func TestNetworkSignature(t *testing.T) {
 		if got := networkSignature(c.addresses); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+	// The one interface iOS names: the same form, "" without an address.
+	if got := interfaceSignature("pdp_ip0", ip("10.1.2.3", "2a00::7")); got != "pdp_ip0 10.1.2.3" {
+		t.Errorf("one interface: %q", got)
+	}
+	if got := interfaceSignature("en0", nil); got != "" {
+		t.Errorf("no address: %q", got)
+	}
+	if InterfaceSignature("no-such-if0") != "" || InterfaceSignature("") != "" {
+		t.Error("a missing interface has a signature")
 	}
 }

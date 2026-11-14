@@ -120,7 +120,7 @@ enum Whitelist {
     /** "wifi", "cellular", "ethernet", "other" or "none" for the check's details. */
     static func networkKind(_ path: Network.NWPath) -> String {
         guard path.status == .satisfied else {
-            // The tunnel's extension sees its path "unsatisfied" while the tunnel is up, whatever the network:
+            // The tunnel's extension in compatibility mode sees its path "unsatisfied" whatever the network:
             // an interface of the phone's with an address tells it then (Wi-Fi that is on but not joined has none).
             let physical: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet]
             let listed = path.availableInterfaces.filter { physical.contains($0.type) }

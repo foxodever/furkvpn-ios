@@ -59,16 +59,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         return (pinned.exclude + subscription.exclude).filter { seen.insert($0).inserted }
     }
     /**
-     * Compatibility mode: iOS doesn't let this extension past its own tunnel (an IPA re-signed with the
-     * app's App ID for the extension too) — the core runs unbound, its servers are out of the tunnel's
-     * routes, and nothing goes direct.
+     * Compatibility mode: the probe got no answer past the tunnel (iOS doesn't take this extension for the
+     * tunnel's provider — an IPA re-signed with the app's App ID for the extension too — or the network was
+     * not ready) — the core runs unbound, its servers are out of the tunnel's routes, and nothing goes direct.
+     * Up to 1.3.2 every build ran like this: the tunnel's routes hid the phone's default route from the kernel
+     * (core/libxray/tunroutes.go).
      */
     private var compat = false
-    /**
-     * The network the core was last started on (`LibxrayNetworkSignature`: the phone's interfaces with their
-     * addresses), "" with none. Not the path from iOS: with the tunnel up it is "unsatisfied" for this extension
-     * whatever the network, so Wi-Fi ↔ mobile went unnoticed and the core kept going out the old way.
-     */
+    /** Compatibility mode may only mean a network that was not ready when asked: it is asked once more, once per network. */
+    private var compatRecheck: DispatchWorkItem?
+    private var compatRechecked = false
+    /** The network the core was last started on (`currentNetwork`), "" with none. */
     private var networkSignature = ""
     /** A new network waiting to settle. */
     private var settlingSignature: String?
@@ -100,8 +101,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var probeServer: String { Self.probeServers.first { !excluded.contains($0) } ?? Self.probeServers[0] }
     private static let tunIPv6 = "fdfe:dcba:9876::1"
     private static let mtu = 1500
+    /** A network that is gone may be back in a moment (Wi-Fi moving between access points)… */
     private static let networkSettle: TimeInterval = 3
+    /** …another one is there to stay. */
+    private static let newNetworkSettle: TimeInterval = 1
     private static let networkPoll = 5
+    private static let compatRecheckAfter: TimeInterval = 20
     private static let autoCheckInterval = 10
     private static let healthRestartMin: TimeInterval = 120
     private static let longSleep: TimeInterval = 5 * 60
@@ -138,9 +143,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         self.payload = payload
         // The phone's network first: the core binds its connections to it.
-        networkSignature = LibxrayNetworkSignature()
-        LibxrayDebugNote("network: \(networkSignature.isEmpty ? "none" : networkSignature)")
         startPathMonitor()
+        networkSignature = queue.sync { currentNetwork() }
+        LibxrayDebugNote("network: \(networkSignature.isEmpty ? "none" : networkSignature)")
         LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
         // Debug mode: does this process reach the network at all, before there is a tunnel to go into?
         if payload.debugMode == true { probeBefore = LibxrayProbeNetworkVia(probeServer, physicalInterfaces.joined(separator: ",")) }
@@ -374,6 +379,31 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let result = (try? JSONDecoder().decode([String: String].self, from: Data(probeResult.utf8))) ?? [:]
         compat = result["unbound"]?.hasPrefix("ok") != true && !pinned.exclude.isEmpty
         coreInterface = compat ? nil : physicalInterfaces.first(where: { result[$0]?.hasPrefix("ok") == true })
+        scheduleCompatRecheck()
+    }
+
+    /**
+     * Compatibility mode chosen on a network that was not ready yet (a moment after Wi-Fi ↔ mobile) would stay
+     * until the next change, with nothing going direct. A little later the phone's interface is asked once more
+     * — bound to it: with the core running, an unbound question could be answered through the tunnel — and
+     * when it answers, the network is probed again as a new one. Once per network. Must run on [queue].
+     */
+    private func scheduleCompatRecheck() {
+        compatRecheck?.cancel()
+        compatRecheck = nil
+        guard compat, !compatRechecked, let interface = physicalInterfaces.first else { return }
+        let server = probeServer
+        let work = DispatchWorkItem { [weak self] in
+            guard LibxrayProbeDNS("\(server):53", interface).hasPrefix("ok") else { return }
+            self?.queue.async {
+                guard let self, self.running, self.compat, !self.compatRechecked else { return }
+                self.compatRechecked = true
+                LibxrayDebugNote("the network answers on \(interface): probing again")
+                self.reload(nil, newNetwork: true) {}
+            }
+        }
+        compatRecheck = work
+        healthQueue.asyncAfter(deadline: .now() + Self.compatRecheckAfter, execute: work)
     }
 
     /**
@@ -472,6 +502,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         healthTimer = nil
         networkWork?.cancel()
         networkWork = nil
+        compatRecheck?.cancel()
+        compatRecheck = nil
         networkTimer?.cancel()
         networkTimer = nil
         watchdogTimer?.cancel()
@@ -502,14 +534,28 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /**
+     * The network the phone is on: the interface iOS sends through (the first of the path's own) with its
+     * addresses — not any interface that has one: Wi-Fi just joined has an address seconds before iOS moves to
+     * it, and mobile data keeps its own under Wi-Fi. Where iOS doesn't say (to an extension it keeps behind
+     * its own tunnel the path is "unsatisfied" whatever the network), the interfaces that have addresses,
+     * Wi-Fi before mobile data. "" with no network. Must run on [queue].
+     */
+    private func currentNetwork() -> String {
+        if let path = monitor?.currentPath, path.status == .satisfied, let primary = Core.physicalInterfaces(path).first {
+            let signature = LibxrayInterfaceSignature(primary)
+            if !signature.isEmpty { return signature }
+        }
+        return LibxrayNetworkSignature()
+    }
+
+    /**
      * Wi-Fi ↔ mobile or another network: connections to the servers made on the old network are dead but
-     * would hang for minutes (and auto-select's checks with them). Once the new network has settled, the tunnel
-     * gets its settings again — the routes left out of it (the servers' addresses, all this extension can reach
-     * past its tunnel) stayed on the old network: nothing worked until the VPN was turned off — and the core
-     * starts afresh on it. Must run on [queue].
+     * would hang for minutes (and auto-select's checks with them), and the core is bound to the old interface.
+     * Once the new network has settled the core starts afresh on it (`reload`). Looked for when iOS reports the
+     * path and every few seconds. Must run on [queue].
      */
     private func checkNetwork() {
-        let now = LibxrayNetworkSignature()
+        let now = currentNetwork()
         guard now != networkSignature else {
             settlingSignature = nil
             networkWork?.cancel()
@@ -522,20 +568,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.settlingSignature = nil
-            // Still changing, or the core is not up yet: the next check looks again.
-            guard self.running, LibxrayNetworkSignature() == now else { return }
+            // Still changing, or the core is not up yet: the next check looks again. (The start may have
+            // taken this network as its own since.)
+            guard self.running, now != self.networkSignature, self.currentNetwork() == now else { return }
             self.networkSignature = now
+            self.compatRechecked = false
             LibxrayDebugNote("network: \(now.isEmpty ? "none" : now)")
-            // No network: the next one gets the new settings, even if it is the same one again.
+            // No network: the next one starts the core afresh, even if it is the same one again.
             guard !now.isEmpty else { return }
-            if let path = self.monitor?.currentPath { self.notePath(path) }
             self.reload(nil, newNetwork: true) {
                 // Operators turn white lists on for mobile data: a new network is worth a check.
                 self.scheduleWhitelistCheck(after: 2)
             }
         }
         networkWork = work
-        queue.asyncAfter(deadline: .now() + Self.networkSettle, execute: work)
+        queue.asyncAfter(deadline: .now() + (now.isEmpty ? Self.networkSettle : Self.newNetworkSettle), execute: work)
     }
 
     private func checkAutoSelect(afterSleep: Bool) {
@@ -650,7 +697,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * Starts the core again with [next] (the server or the settings changed), with new routes when needed.
      * One at a time: a second one while new routes are being applied used to overlap it, and a burst of them
      * (subscription updates pressed again and again) left the tunnel stuck "reconnecting". [newNetwork]: the
-     * phone is on another network — the routes again, and which way gets out on it. Must run on [queue].
+     * phone is on another network — which way gets out on it, and in compatibility mode the routes again.
+     * Must run on [queue].
      */
     private func reload(_ next: TunnelPayload?, newNetwork: Bool = false, done: @escaping () -> Void) {
         if reloading {
@@ -691,8 +739,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let next, (next.probes ?? []) != probesBefore {
             subscription = Core.resolveServers((next.servers ?? []) + (next.probes ?? []))
         }
-        guard newNetwork || lanDirect != routesLanDirect || Set(excluded) != previous else {
-            restartCore("settings changed")
+        let routesChanged = lanDirect != routesLanDirect || Set(excluded) != previous
+        if newNetwork {
+            // Which way gets out on the new network (the interface to bind to, compatibility mode) — asked with
+            // the core stopped: while it runs, an unbound question could be answered through the tunnel.
+            reasserting = true
+            stopCore()
+            if let path = monitor?.currentPath { notePath(path) }
+            probeNetwork()
+        }
+        // In compatibility mode all the core reaches are the addresses left out of the routes, and those stay
+        // on the old network until the tunnel gets its settings again (up to 1.3.1 nothing worked after
+        // Wi-Fi ↔ mobile until the VPN was turned off). Otherwise the settings stay: the core is bound to the
+        // phone's interface, and no other client applies them again on a new network.
+        guard routesChanged || (newNetwork && compat) else {
+            restartCore(newNetwork ? "network changed" : "settings changed")
+            // restartCore leaves it on when there is no tunnel to start on.
+            reasserting = false
             done()
             return
         }
@@ -706,7 +769,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 // while it runs could take that copy, which the restart closes — "bad file descriptor" (seen on a Mac).
                 self.stopCore()
                 if Self.interfaceName(self.tunFd) == nil, let fd = Self.findTunnelDescriptor() { self.tunFd = fd }
-                // Another network: which way gets out on it (compatibility mode, the interface to bind to).
+                // What gets out may be different with the routes on the new network.
                 if newNetwork { self.probeNetwork() }
                 self.restartCore(newNetwork ? "network changed" : "routes changed")
                 // restartCore leaves it on when there is no tunnel to start on.

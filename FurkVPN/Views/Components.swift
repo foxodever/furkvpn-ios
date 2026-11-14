@@ -148,11 +148,12 @@ enum Format {
 
 /**
  * Links in the announcement of the subscription, as on Android: addresses with http(s), Telegram names
- * ("@FurkVPNbot" → t.me) and bare domains ("FurkVPN.info" → https). Text opens them on a tap.
+ * ("@FurkVPNbot" → t.me) and bare domains ("FurkVPN.info" → https). Text opens them on a tap. An e-mail
+ * address opens Mail: its "@domain" used to be taken for a Telegram name (somebody else's).
  */
 enum Linkify {
     private static let pattern = try! NSRegularExpression(
-        pattern: #"(https?://[^\s]+)|(@[A-Za-z0-9_]{4,})|(\b[A-Za-z0-9-]+\.(?:info|ru|com|net|app|me)\b(?:/[^\s]*)?)"#)
+        pattern: #"(https?://[^\s]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)|((?<![A-Za-z0-9_.])@[A-Za-z0-9_]{4,})|(\b[A-Za-z0-9-]+\.(?:info|ru|com|net|app|me)\b(?:/[^\s]*)?)"#)
 
     static func text(_ string: String) -> AttributedString {
         let ns = string as NSString
@@ -169,6 +170,8 @@ enum Linkify {
                 address = "https://t.me/" + String(value.dropFirst())
             } else if value.hasPrefix("http") {
                 address = value
+            } else if value.contains("@") {
+                address = "mailto:" + value
             } else {
                 address = "https://" + value
             }

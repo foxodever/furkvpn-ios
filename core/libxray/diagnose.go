@@ -239,12 +239,11 @@ func InterfaceSummary() string {
 	return strings.Join(parts, " · ")
 }
 
-// NetworkSignature tells one of the phone's networks from another, for the tunnel to notice a new one
-// even where iOS reports its path as unsatisfied (as it does to the tunnel's extension once the tunnel is
-// up): the Wi-Fi or Ethernet interfaces ("en…") with their IPv4 addresses, or, when none has an address,
-// cellular ("pdp_ip0") — which stays up under Wi-Fi and would otherwise make its changes look like a new
-// network. A global IPv6 address only as "+IPv6": iOS rotates the temporary ones. "" without a network.
-// "en0 192.168.1.5", "pdp_ip0 10.1.2.3 +IPv6".
+// NetworkSignature tells one of the phone's networks from another where iOS doesn't say which interface
+// it sends through (the path of an extension it keeps behind its own tunnel is "unsatisfied" whatever the
+// network): the Wi-Fi or Ethernet interfaces ("en…") with their IPv4 addresses, or, when none has an
+// address, cellular ("pdp_ip0") — which stays up under Wi-Fi and would otherwise make its changes look like
+// a new network. "" without a network. "en0 192.168.1.5", "pdp_ip0 10.1.2.3", "pdp_ip0 +IPv6".
 func NetworkSignature() string {
 	list, err := net.Interfaces()
 	if err != nil {
@@ -257,6 +256,12 @@ func NetworkSignature() string {
 		}
 	}
 	return networkSignature(addresses)
+}
+
+// InterfaceSignature is NetworkSignature for the one interface iOS says it sends through ("en0"); "" when
+// it has no address.
+func InterfaceSignature(name string) string {
+	return interfaceSignature(name, interfaceAddresses(name))
 }
 
 func networkSignature(addresses map[string][]net.IP) string {
@@ -272,23 +277,32 @@ func networkSignature(addresses map[string][]net.IP) string {
 	}
 	var parts []string
 	for _, name := range names {
-		var v4 []string
-		v6 := false
-		for _, ip := range addresses[name] {
-			if ip.To4() != nil {
-				v4 = append(v4, ip.String())
-			} else {
-				v6 = true
-			}
-		}
-		sort.Strings(v4)
-		part := strings.TrimSpace(name + " " + strings.Join(v4, ","))
-		if v6 {
-			part += " +IPv6"
-		}
-		parts = append(parts, part)
+		parts = append(parts, interfaceSignature(name, addresses[name]))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// interfaceSignature: the name and the IPv4 addresses, sorted; IPv6 only as "+IPv6", and only without an
+// IPv4 one — iOS rotates the temporary addresses, and one that comes a few seconds after the IPv4 address
+// is not another network.
+func interfaceSignature(name string, ips []net.IP) string {
+	var v4 []string
+	v6 := false
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			v4 = append(v4, ip.String())
+		} else {
+			v6 = true
+		}
+	}
+	switch {
+	case len(v4) > 0:
+		sort.Strings(v4)
+		return name + " " + strings.Join(v4, ",")
+	case v6:
+		return name + " +IPv6"
+	}
+	return ""
 }
 
 // interfaceAddresses returns the interface's addresses other than link-local ones; none when it is

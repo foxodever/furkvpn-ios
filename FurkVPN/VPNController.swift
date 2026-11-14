@@ -25,6 +25,22 @@ enum TunnelExtension {
     static var id: String { bundleId ?? (Bundle.main.bundleIdentifier ?? "com.furkvpn.app") + ".tunnel" }
 }
 
+/** Resumes a continuation once: with the extension's answer, or with what stands for none when it didn't come in time. */
+private final class PendingAnswer<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Never>?
+
+    init(_ continuation: CheckedContinuation<T, Never>) { self.continuation = continuation }
+
+    func resume(_ value: T) {
+        lock.lock()
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume(returning: value)
+    }
+}
+
 /** The system VPN profile of FurkVPN and its tunnel: connect, disconnect, status, messages to the extension. */
 @MainActor
 final class VPNController: ObservableObject {
@@ -211,15 +227,22 @@ final class VPNController: ObservableObject {
     /** Connected or on the way there: a change of server or settings has to reach the tunnel. */
     var isActive: Bool { isConnected || state == .connecting }
 
-    /** Sends a message to the running extension; nil when it is not running or did not answer. */
-    func send(_ message: TunnelMessage) async -> Data? {
+    /**
+     * Sends a message to the running extension; nil when it is not running or did not answer in [timeout]
+     * seconds. iOS doesn't always call back when the extension dies or hangs with a message, and whoever
+     * waited for the answer (a subscription update and everything queued behind it, the speed on the main
+     * screen) would wait forever.
+     */
+    func send(_ message: TunnelMessage, timeout: TimeInterval = 30) async -> Data? {
         guard let session = manager?.connection as? NETunnelProviderSession, session.status == .connected else { return nil }
-        return await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
+            let answer = PendingAnswer(continuation)
             do {
-                try session.sendProviderMessage(message.encoded()) { continuation.resume(returning: $0) }
+                try session.sendProviderMessage(message.encoded()) { answer.resume($0) }
             } catch {
-                continuation.resume(returning: nil)
+                answer.resume(nil)
             }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { answer.resume(nil) }
         }
     }
 
@@ -228,15 +251,17 @@ final class VPNController: ObservableObject {
         guard let session = manager?.connection as? NETunnelProviderSession else { return (nil, "нет VPN-профиля") }
         guard session.status == .connected else { return (nil, "VPN не подключён (статус \(session.status.rawValue))") }
         let started = Date()
-        return await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<(Data?, String), Never>) in
+            let answer = PendingAnswer(continuation)
             do {
                 try session.sendProviderMessage(message.encoded()) { data in
                     let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
-                    continuation.resume(returning: (data, data == nil ? "расширение ответило пустым через \(seconds) с" : ""))
+                    answer.resume((data, data == nil ? "расширение ответило пустым через \(seconds) с" : ""))
                 }
             } catch {
-                continuation.resume(returning: (nil, "не отправилось: \(error.localizedDescription)"))
+                answer.resume((nil, "не отправилось: \(error.localizedDescription)"))
             }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30) { answer.resume((nil, "расширение не ответило за 30 с")) }
         }
     }
 

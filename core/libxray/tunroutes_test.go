@@ -52,6 +52,30 @@ func TestLanAndMulticastStayOutOfTheTunnel(t *testing.T) {
 	}
 }
 
+// Apple's kernel takes a route to the address 0.0.0.0 (or ::) for the default one whatever its mask:
+// only the default itself may start there.
+func TestNoRouteAtZeroButTheDefault(t *testing.T) {
+	v4, v6 := routesOf(t, true)
+	for _, r := range append(v4, v6...) {
+		if addr := netip.MustParseAddr(r.Address); addr.IsUnspecified() {
+			t.Errorf("route %s/%d starts at the address of the default route", r.Address, r.Prefix)
+		}
+	}
+	for _, reserved := range []string{"0.0.0.0", "0.255.255.255"} {
+		if inRoutes(reserved, v4) {
+			t.Errorf("%s goes into the tunnel", reserved)
+		}
+	}
+	for _, internet := range []string{"1.0.0.1", "2.2.2.2", "5.255.255.255"} {
+		if !inRoutes(internet, v4) {
+			t.Errorf("%s misses the tunnel", internet)
+		}
+	}
+	if inRoutes("::1", v6) || !inRoutes("2000::1", v6) || !inRoutes("100::1", v6) {
+		t.Errorf("IPv6 routes %v", v6)
+	}
+}
+
 func TestFewRoutes(t *testing.T) {
 	// The smallest split of the address space around the local ranges: a few dozen prefixes.
 	v4, v6 := routesOf(t, true)

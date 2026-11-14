@@ -12,10 +12,17 @@ import (
 // printers) and connections to devices at home work as without the VPN. Port of the Android
 // app's TunRoutes.
 
-// Home networks, link-local, multicast and the reserved block with the broadcast address.
+// Home networks, link-local, multicast and the reserved block with the broadcast address — and the block
+// the address space starts with (0.0.0.0/8, ::/8: nothing public is there). Without it the first route
+// would be 0.0.0.0/5 (::/1), and Apple's kernel takes any route to the address 0.0.0.0, whatever its mask,
+// for the default one (rt_primary_default and node_lookup_default in xnu's route.c): the tunnel became
+// "the primary interface", and a connection tied to the phone's own interface found no route ("network is
+// unreachable") — the extension's own (it reached only addresses left out of the routes: no "direct", no
+// pings), and iOS's checks of a Wi-Fi network it has just joined (the phone stayed on mobile data, without
+// the Wi-Fi icon, until the VPN was off). The WireGuard app's list for Apple starts at 1.0.0.0/8 too.
 var (
-	localIPv4 = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4"}
-	localIPv6 = []string{"fc00::/7", "fe80::/10", "ff00::/8"}
+	localIPv4 = []string{"0.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4"}
+	localIPv6 = []string{"::/8", "fc00::/7", "fe80::/10", "ff00::/8"}
 )
 
 type tunRoute struct {
