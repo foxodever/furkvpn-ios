@@ -185,13 +185,16 @@ func splitDetour(detour string) (inbound, outbound string) {
 // nameCache remembers which name an address was resolved from, keeping the latest [size] addresses.
 type nameCache struct {
 	mu    sync.Mutex
+	size  int
 	names map[string]string
 	ring  []string
 	next  int
 }
 
+// newNameCache takes its memory with the first name: allocated in full at the start, 8192 entries were
+// ~0.6 MB of each process (the tunnel's extension too) with the connection log off.
 func newNameCache(size int) *nameCache {
-	return &nameCache{names: make(map[string]string, size), ring: make([]string, size)}
+	return &nameCache{size: size}
 }
 
 func (c *nameCache) put(ip, name string) {
@@ -200,6 +203,10 @@ func (c *nameCache) put(ip, name string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.ring == nil {
+		c.names = make(map[string]string)
+		c.ring = make([]string, c.size)
+	}
 	if _, ok := c.names[ip]; !ok {
 		if old := c.ring[c.next]; old != "" {
 			delete(c.names, old)

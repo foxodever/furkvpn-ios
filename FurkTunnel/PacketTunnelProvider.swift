@@ -79,6 +79,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var healthTimer: DispatchSourceTimer?
     /** Moves the "VPN stopped" notification on while this process lives (StopNotices). */
     private var watchdogTimer: DispatchSourceTimer?
+    private let watchdogQueue = DispatchQueue(label: "com.furkvpn.tunnel.watchdog")
+    /** No such notification is due (asleep, stopping, given up): the watchdog doesn't schedule it. On [watchdogQueue]. */
+    private var watchdogPaused = false
+    /** Stopping or given up: a wake doesn't bring the watchdog back. On [watchdogQueue]. */
+    private var watchdogDone = false
+    /** stopTunnel has been called: nothing starts the core again. */
+    private var stopping = false
     /** White list checks every few minutes while connected (Shared/Whitelist.swift). */
     private var whitelistTimer: DispatchSourceTimer?
     /** White list checks take seconds: neither the core's queue nor auto-select's. */
@@ -144,11 +151,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         self.payload = payload
         // The phone's network first: the core binds its connections to it.
         startPathMonitor()
-        networkSignature = queue.sync { currentNetwork() }
-        LibxrayDebugNote("network: \(networkSignature.isEmpty ? "none" : networkSignature)")
+        let network: String = queue.sync {
+            networkSignature = currentNetwork()
+            return networkSignature
+        }
+        LibxrayDebugNote("network: \(network.isEmpty ? "none" : network)")
         LibxrayDebugNote("start: \(payload.serverName), options \(options?[TunnelPayload.key] != nil ? "from the app" : "none")")
         // Debug mode: does this process reach the network at all, before there is a tunnel to go into?
-        if payload.debugMode == true { probeBefore = LibxrayProbeNetworkVia(probeServer, physicalInterfaces.joined(separator: ",")) }
+        if payload.debugMode == true {
+            probeBefore = LibxrayProbeNetworkVia(probeServer, queue.sync { physicalInterfaces }.joined(separator: ","))
+        }
         routesLanDirect = Self.lanDirect(payload.routing)
         // While this process still reaches the network: the servers' addresses, to leave them out of the routes.
         pinned = Core.pinTunnelServers(payload.config)
@@ -190,6 +202,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         LibxrayDebugNote("stop requested, reason \(reason.rawValue)")
         queue.async {
+            // A reload still applying the tunnel's settings must not start the core again after this.
+            self.stopping = true
+            self.pauseWatchdog(forGood: true)
             self.stopWatchers()
             self.stopCore()
             LibxrayDebugNote("stopped")
@@ -215,7 +230,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /** The extension gives up by itself: the error goes to the app (and to a notification, when they are on). */
     private func giveUp(_ error: Error) {
         gaveUp = true
-        StopNotices.disarm()
+        pauseWatchdog(forGood: true)
         StopNotices.post("FurkVPN отключён", error.localizedDescription)
         cancelTunnelWithError(error)
     }
@@ -223,14 +238,33 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     // The phone goes to sleep and this process with it: the "VPN stopped" notification must not go off meanwhile.
     override func sleep(completionHandler: @escaping () -> Void) {
         sleptAt = Date()
-        StopNotices.disarm()
+        // Not only taken back: the watchdog's next turn could come before iOS freezes this process, and the
+        // notification it scheduled would go off a minute into the phone's sleep.
+        pauseWatchdog()
         completionHandler()
+    }
+
+    /** Takes the scheduled "VPN stopped" notification back and keeps the watchdog from scheduling it again. */
+    private func pauseWatchdog(forGood: Bool = false) {
+        watchdogQueue.sync {
+            watchdogPaused = true
+            if forGood { watchdogDone = true }
+            StopNotices.disarm()
+        }
+    }
+
+    private func resumeWatchdog() {
+        watchdogQueue.async {
+            guard !self.watchdogDone else { return }
+            self.watchdogPaused = false
+            StopNotices.arm()
+        }
     }
 
     // After a long sleep the connections to the servers may be dead (the operator dropped them):
     // check auto-select's servers now instead of waiting for its next round.
     override func wake() {
-        StopNotices.arm()
+        resumeWatchdog()
         guard let slept = sleptAt else { return }
         sleptAt = nil
         if Date().timeIntervalSince(slept) >= Self.longSleep {
@@ -340,7 +374,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /** Starts the core again on the same tunnel: apps reconnect through it. Must run on [queue]. */
     private func restartCore(_ why: String) {
-        guard tunFd >= 0 else { return }
+        guard tunFd >= 0, !stopping else { return }
         os_log("restarting the core: %{public}@", log: log, why)
         LibxrayDebugNote("restart: \(why)")
         reasserting = true
@@ -467,8 +501,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self?.networkChanged(path)
             first.signal()
         }
-        monitor.start(queue: queue)
+        // Before the start: the handler reads it.
         self.monitor = monitor
+        monitor.start(queue: queue)
         _ = first.wait(timeout: .now() + 1)
     }
 
@@ -478,9 +513,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         timer.setEventHandler { [weak self] in self?.checkAutoSelectNow(afterSleep: false) }
         timer.resume()
         healthTimer = timer
-        let watchdog = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.furkvpn.tunnel.watchdog"))
+        let watchdog = DispatchSource.makeTimerSource(queue: watchdogQueue)
         watchdog.schedule(deadline: .now(), repeating: .seconds(20))
-        watchdog.setEventHandler { StopNotices.arm() }
+        watchdog.setEventHandler { [weak self] in
+            guard let self, !self.watchdogPaused else { return }
+            StopNotices.arm()
+        }
         watchdog.resume()
         watchdogTimer = watchdog
         let network = DispatchSource.makeTimerSource(queue: queue)
@@ -604,7 +642,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         guard let check = try? JSONDecoder().decode(Check.self, from: Data(answer.utf8)) else { return }
         queue.async { [weak self] in
-            guard let self, self.running, self.serverKey == key else { return }
+            // A reload is about to start the core again anyway.
+            guard let self, self.running, !self.reloading, self.serverKey == key else { return }
             if !check.best.isEmpty { self.autoBest = (key, check.best, Date()) }
             guard check.restart, !self.networkSignature.isEmpty else { return }
             guard Date().timeIntervalSince(self.lastHealthRestart) >= Self.healthRestartMin else { return }
@@ -640,7 +679,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     + String(LibxrayDebugErrors(8).suffix(1600))
                 LibxrayDebugNote("self-test done")
                 self.gaveUp = true
-                StopNotices.disarm()
+                self.pauseWatchdog(forGood: true)
                 self.cancelTunnelWithError(Self.failure(summary))
             }
         }
@@ -656,7 +695,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler?(nil)
             return
         }
-        LibxrayDebugNote("message \(message)".prefix(80).description)
+        switch message {
+        case .stats, .addresses:
+            // Asked every second while the app is open: noted, they pushed everything else out of the log
+            // (150 lines) in a couple of minutes — the lines about the network and the restarts too.
+            break
+        default:
+            LibxrayDebugNote("message \(message)".prefix(80).description)
+        }
         switch message {
         case .stats:
             queue.async {
@@ -722,7 +768,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /** Must run on [queue]; [done] is called on it. */
     private func applyReload(_ next: TunnelPayload?, newNetwork: Bool, done: @escaping () -> Void) {
-        guard running else {
+        guard running, !stopping else {
             done()
             return
         }
@@ -736,8 +782,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let previous = Set(excluded)
         if let next { pinned = Core.pinTunnelServers(next.config) }
         // White list detection turned on or off: its sites in or out of the routes.
-        if let next, (next.probes ?? []) != probesBefore {
+        let probesChanged = next.map { ($0.probes ?? []) != probesBefore } ?? false
+        if let next, probesChanged {
             subscription = Core.resolveServers((next.servers ?? []) + (next.probes ?? []))
+        }
+        // Just turned on: its first check, now that the sites' addresses are known (the one the app asked for
+        // with the switch came before them and checked nothing).
+        let finish = {
+            done()
+            if probesChanged { self.scheduleWhitelistCheck(after: 2) }
         }
         let routesChanged = lanDirect != routesLanDirect || Set(excluded) != previous
         if newNetwork {
@@ -756,7 +809,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             restartCore(newNetwork ? "network changed" : "settings changed")
             // restartCore leaves it on when there is no tunnel to start on.
             reasserting = false
-            done()
+            finish()
             return
         }
         // New routes for the tunnel ("LAN directly", the servers or the network changed), then the core on them.
@@ -774,7 +827,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 self.restartCore(newNetwork ? "network changed" : "routes changed")
                 // restartCore leaves it on when there is no tunnel to start on.
                 self.reasserting = false
-                done()
+                finish()
             }
         }
     }

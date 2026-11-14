@@ -3,6 +3,7 @@ package libxray
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestAutoSelectHealth(t *testing.T) {
@@ -20,6 +21,7 @@ func TestAutoSelectHealth(t *testing.T) {
 	check := func(afterSleep bool, wantRestart bool, wantBest string, wantRechecks int) {
 		t.Helper()
 		rechecks = 0
+		h.lastRecheck = time.Time{} // each case as if the last recheck was long ago
 		r := h.check(afterSleep, observe, recheck)
 		if r.Restart != wantRestart || r.Best != wantBest || rechecks != wantRechecks {
 			t.Errorf("check = %+v after %d rechecks, want restart=%v best=%q after %d", r, rechecks, wantRestart, wantBest, wantRechecks)
@@ -57,6 +59,24 @@ func TestAutoSelectHealth(t *testing.T) {
 	// No auto-select in the config.
 	rounds = [][]serverCheck{nil}
 	check(false, false, "", 0)
+
+	// None answers, again and again: a recheck at most once a minute, nothing decided in between.
+	h.reset()
+	none := []serverCheck{{Tag: "a"}, {Tag: "b"}}
+	rounds = [][]serverCheck{none}
+	rechecks = 0
+	if r := h.check(false, observe, recheck); !r.Restart || rechecks != 1 {
+		t.Errorf("first look: %+v after %d rechecks", r, rechecks)
+	}
+	for i := 0; i < 5; i++ {
+		if r := h.check(false, observe, recheck); r.Restart || rechecks != 1 {
+			t.Errorf("look %d within a minute: %+v after %d rechecks", i+2, r, rechecks)
+		}
+	}
+	h.lastRecheck = time.Now().Add(-recheckEvery)
+	if r := h.check(false, observe, recheck); !r.Restart || rechecks != 2 {
+		t.Errorf("a minute later: %+v after %d rechecks", r, rechecks)
+	}
 }
 
 func TestStartTunnelReportsErrors(t *testing.T) {

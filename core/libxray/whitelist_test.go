@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -36,9 +37,12 @@ func runCheck(t *testing.T, config string, addresses map[string]string, pinnedOn
 }
 
 func TestWhitelistCheck(t *testing.T) {
+	var userAgentMu sync.Mutex
 	var userAgent string
 	open := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgentMu.Lock()
 		userAgent = r.UserAgent()
+		userAgentMu.Unlock()
 		if r.Method != http.MethodHead {
 			t.Errorf("method %s", r.Method)
 		}
@@ -59,8 +63,11 @@ func TestWhitelistCheck(t *testing.T) {
 	if a.Blocked[0].Error != "CONNECT" || a.Blocked[0].Host != "google.test" || a.Allowed[0].Ms == nil || a.Allowed[1].Ms == nil {
 		t.Errorf("%+v", a)
 	}
-	if strings.Contains(strings.ToLower(userAgent), "furk") || userAgent == "" {
-		t.Errorf("user agent %q", userAgent)
+	userAgentMu.Lock()
+	agent := userAgent
+	userAgentMu.Unlock()
+	if strings.Contains(strings.ToLower(agent), "furk") || agent == "" {
+		t.Errorf("user agent %q", agent)
 	}
 
 	// Everything answers.

@@ -152,11 +152,19 @@ struct ConnectToServerIntent: AppIntent {
             throw IntentFailure(localizedStringResource: "Такого сервера больше нет в подписке")
         }
         Store.selectedServer = server.id
-        if TunnelSwitch.isOn(manager), let session = manager.connection as? NETunnelProviderSession,
-           manager.connection.status == .connected {
+        if TunnelSwitch.isOn(manager) {
+            // Still connecting, or moving to another network: the tunnel takes messages only once connected
+            // (and its start may have read the server chosen before).
+            var waited = 0
+            while manager.connection.status != .connected, TunnelSwitch.isOn(manager), waited < 20 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                waited += 1
+            }
             // The running tunnel moves to it, as when it is picked in the app.
-            try? session.sendProviderMessage(TunnelMessage.reload(TunnelPayload.fromStore()).encoded()) { _ in }
-        } else if !TunnelSwitch.isOn(manager) {
+            if manager.connection.status == .connected, let session = manager.connection as? NETunnelProviderSession {
+                try? session.sendProviderMessage(TunnelMessage.reload(TunnelPayload.fromStore()).encoded()) { _ in }
+            }
+        } else {
             try await TunnelSwitch.turnOn(manager)
         }
         return .result(dialog: "FurkVPN: \(server.name)")

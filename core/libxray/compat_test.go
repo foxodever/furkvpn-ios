@@ -111,4 +111,41 @@ func TestNoDirect(t *testing.T) {
 	if !strings.Contains(out, `"outboundTag":"direct"`) {
 		t.Error("direct rules gone without noDirect")
 	}
+
+	// A freedom outbound without a tag: the balancer's rules (no outboundTag) are not direct ones.
+	balanced := `{"outbounds":[
+	  {"protocol":"freedom"},
+	  {"tag":"proxy-1","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443}]}},
+	  {"tag":"proxy-2","protocol":"vless","settings":{"vnext":[{"address":"5.6.7.8","port":443}]}}],
+	  "routing":{"rules":[
+	    {"type":"field","domain":["domain:netflix.com"],"balancerTag":"eu"},
+	    {"type":"field","network":"tcp,udp","balancerTag":"auto"}],
+	   "balancers":[{"tag":"eu","selector":["proxy-2"]},{"tag":"auto","selector":["proxy"]}]}}`
+	rules := rulesOf(buildTunnel(t, balanced, `{"noDirect":true}`))
+	found := false
+	for _, r := range rules {
+		if asString(r["domain"]) == `["domain:netflix.com"]` {
+			found = true
+			if r["balancerTag"] != "eu" {
+				t.Errorf("balancer rule retargeted: %v", r)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("rules = %v", rules)
+	}
+}
+
+// "Through VPN" goes to a server even when the panel's catch-all sends everything else direct.
+func TestThroughVPNNeverMeansDirect(t *testing.T) {
+	raw := `{"outbounds":[
+	  {"tag":"direct","protocol":"freedom"},
+	  {"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"1.2.3.4","port":443}]}}],
+	  "routing":{"rules":[{"type":"field","network":"tcp,udp","outboundTag":"direct"}]}}`
+	rules := rulesOf(buildTunnel(t, raw, `{"routing":{"lanDirect":false,"proxy":["domain:instagram.com"]}}`))
+	for _, r := range rules {
+		if asString(r["domain"]) == `["domain:instagram.com"]` && r["outboundTag"] != "proxy" {
+			t.Errorf("through VPN rule = %v", r)
+		}
+	}
 }

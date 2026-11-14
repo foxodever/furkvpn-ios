@@ -274,9 +274,15 @@ final class AppModel: ObservableObject {
                     self.account = nil
                     self.pings = [:]
                     self.select(info.selectable.first?.key, reconnect: false)
+                    // White lists are looked for afresh: a check made before this key had no server to move,
+                    // and "on already" never moves one.
+                    Store.whitelistCheck = nil
+                    Store.whitelistAutoSwitched = nil
+                    self.whitelistCheck = nil
                     self.show("Ключ добавлен")
                     if wasActive { await self.vpn.reload() }
                 }
+                checkWhitelist()
                 await refreshAccount(key.url, force: true)
             } catch {
                 keyError = (error as? LocalizedError)?.errorDescription ?? SubscriptionError.network(error).errorDescription
@@ -292,8 +298,10 @@ final class AppModel: ObservableObject {
         guard case let .ok(key) = Core.parseKey(current.url, allowedHosts: config.allowedSubscriptionHosts) else {
             throw SubscriptionError.foreign
         }
+        // An update the user asked for keeps the button busy until its account refresh is done too.
+        let requested = refreshing
         refreshing = true
-        defer { refreshing = false }
+        defer { refreshing = requested }
         let downloaded = try await SubscriptionLoader.download(key, config: config)
         let info = SubscriptionLoader.info(for: key, downloaded)
         let oldConfig = selectedServer.flatMap { Store.config(for: $0.key) }
@@ -339,6 +347,7 @@ final class AppModel: ObservableObject {
                 self.account = nil
                 self.selectedKey = nil
                 self.pings = [:]
+                self.whitelistCheck = nil
             }
         }
     }
@@ -380,6 +389,8 @@ final class AppModel: ObservableObject {
                 whitelistChecking = false
                 whitelistTask = nil
             }
+            // On a cold start the VPN's state is not known yet: ours, already on, would pass for somebody else's.
+            await vpn.loaded()
             otherVPN = false
             if vpn.isConnected {
                 guard let data = await vpn.send(.whitelist), let check = try? JSONDecoder().decode(WhitelistCheck.self, from: data) else { return }

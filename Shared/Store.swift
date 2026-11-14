@@ -76,6 +76,9 @@ enum Store {
         try? FileManager.default.removeItem(at: configsFile)
         try? FileManager.default.removeItem(at: accountFile)
         selectedServer = nil
+        // The next key's servers are moved for white lists from scratch.
+        whitelistCheck = nil
+        whitelistAutoSwitched = nil
     }
 
     /**

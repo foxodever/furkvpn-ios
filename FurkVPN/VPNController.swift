@@ -63,6 +63,9 @@ final class VPNController: ObservableObject {
     private var userStopped = false
     /** A reload the extension didn't get: connect again once the tunnel is down. */
     private var connectWhenStopped = false
+    /** A connect is saving the profile (iOS may be asking to allow it): a second press waits for it. */
+    private var starting = false
+    private var loadTask: Task<Void, Never>?
 
     init() {
         observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] note in
@@ -75,7 +78,12 @@ final class VPNController: ObservableObject {
             return
         }
         #endif
-        Task { await load() }
+        loadTask = Task { await load() }
+    }
+
+    /** Returns once the VPN profile has been read: until then [state] is idle whatever the VPN does. */
+    func loaded() async {
+        await loadTask?.value
     }
 
     private func load() async {
@@ -172,6 +180,11 @@ final class VPNController: ObservableObject {
     }
 
     func connect() async {
+        // Pressed twice on the first connection, each press made a VPN profile of its own.
+        guard !starting else { return }
+        starting = true
+        defer { starting = false }
+        userStopped = false
         do {
             let payload = TunnelPayload.fromStore(debug: Store.debugMode)
             // Debug mode is for this one connection: its self-test ends it anyway.
@@ -197,18 +210,19 @@ final class VPNController: ObservableObject {
     }
 
     func disconnect() {
-        userStopped = true
+        // With nothing running there is no stop to come, and the flag would hide the next connection's error.
+        userStopped = state != .idle
         guard let manager else { return }
-        // Otherwise iOS would bring it right back.
-        if manager.isOnDemandEnabled {
-            manager.isOnDemandEnabled = false
-            Task {
+        Task {
+            // Shortcuts and the Control Center button save the profile through their own copy of it: this one
+            // may not know that their start turned auto-reconnect on, and iOS would bring the VPN right back.
+            try? await manager.loadFromPreferences()
+            if manager.isOnDemandEnabled {
+                manager.isOnDemandEnabled = false
                 try? await manager.saveToPreferences()
-                manager.connection.stopVPNTunnel()
             }
-            return
+            manager.connection.stopVPNTunnel()
         }
-        manager.connection.stopVPNTunnel()
     }
 
     /** Settings → «Переподключаться автоматически» changed: a connected VPN keeps it from now on, otherwise from the next connection. */
@@ -283,10 +297,10 @@ final class VPNController: ObservableObject {
             return
         }
         if await send(.reload(TunnelPayload.fromStore())) == nil, isConnected {
-            // Some re-signed builds never get app messages through to the extension: reconnect instead.
+            // Some re-signed builds never get app messages through to the extension: reconnect instead
+            // (auto-reconnect off first, or iOS starts the tunnel again by itself, with the old server).
             connectWhenStopped = true
-            userStopped = true
-            manager?.connection.stopVPNTunnel()
+            disconnect()
         }
     }
 

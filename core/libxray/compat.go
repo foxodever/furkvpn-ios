@@ -190,22 +190,15 @@ func serverHosts(cfg map[string]any, indexes []int) []string {
 func withoutDirect(rules []any, outbounds []any, templateOutbounds []map[string]any, templateRules []any) []any {
 	direct := map[string]bool{}
 	for _, o := range outbounds {
-		if ob := asMap(o); stringOf(ob["protocol"]) == "freedom" {
+		// One without a tag no rule can name: "" would take every rule without an outboundTag (the
+		// balancer's) for a direct one.
+		if ob := asMap(o); stringOf(ob["protocol"]) == "freedom" && stringOf(ob["tag"]) != "" {
 			direct[stringOf(ob["tag"])] = true
 		}
 	}
-	key, tag := proxyTarget(templateOutbounds, templateRules)
-	if key == "outboundTag" && direct[tag] {
-		key, tag = "outboundTag", ""
-		for _, ob := range templateOutbounds {
-			if proxyProtocols[stringOf(ob["protocol"])] {
-				tag = stringOf(ob["tag"])
-				break
-			}
-		}
-		if tag == "" {
-			return rules // no server to send it to
-		}
+	key, tag, ok := serverTarget(templateOutbounds, templateRules)
+	if !ok {
+		return rules // no server to send it to
 	}
 	result := make([]any, 0, len(rules)+1)
 	for _, rule := range rules {

@@ -23,6 +23,9 @@ func TestSplitDetour(t *testing.T) {
 }
 
 func TestEventUsesDNSNames(t *testing.T) {
+	if c := newNameCache(4); c.get("1.1.1.1") != "" || c.ring != nil {
+		t.Error("an empty name cache took its memory")
+	}
 	dnsNames.put("142.250.1.1", "www.google.com")
 	e, ok := eventOf(&xlog.AccessMessage{
 		From:   xnet.TCPDestination(xnet.ParseAddress("172.19.0.1"), 40000),

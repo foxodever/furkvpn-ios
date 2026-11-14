@@ -196,7 +196,10 @@ func buildTunnelConfig(source map[string]any, opts tunnelOptions) map[string]any
 		for k, v := range d {
 			dns[k] = v
 		}
-	} else {
+	}
+	// No servers (no dns section, or one with hosts only): Xray would ask the system's resolver, which for
+	// the tunnel's extension is the tunnel's own DNS.
+	if servers, _ := dns["servers"].([]any); len(servers) == 0 {
 		dns["servers"] = []any{"1.1.1.1", "8.8.8.8"}
 	}
 	dns["queryStrategy"] = "UseIPv4"
@@ -264,7 +267,8 @@ func userRules(r *routingOptions, templateOutbounds []map[string]any, templateRu
 		return fallbackTag
 	}
 
-	proxyKey, proxyTag := proxyTarget(templateOutbounds, templateRules)
+	// No server at all: as the panel has it, there is nothing better.
+	proxyKey, proxyTag, _ := serverTarget(templateOutbounds, templateRules)
 
 	var result []any
 	for _, action := range []string{"block", "direct", "proxy"} {
@@ -351,6 +355,29 @@ func proxyTarget(templateOutbounds []map[string]any, templateRules []any) (key, 
 		return "outboundTag", stringOf(templateOutbounds[0]["tag"])
 	}
 	return "outboundTag", "proxy"
+}
+
+// serverTarget is where traffic for the server goes: the panel's catch-all (proxyTarget) or, when that sends
+// it out directly, the first proxy outbound — "through VPN" must never mean direct. ok is false when the
+// config has no proxy outbound to fall back to.
+func serverTarget(templateOutbounds []map[string]any, templateRules []any) (key, tag string, ok bool) {
+	key, tag = proxyTarget(templateOutbounds, templateRules)
+	direct := false
+	for _, ob := range templateOutbounds {
+		if stringOf(ob["tag"]) == tag && stringOf(ob["protocol"]) == "freedom" {
+			direct = true
+			break
+		}
+	}
+	if key != "outboundTag" || !direct {
+		return key, tag, true
+	}
+	for _, ob := range templateOutbounds {
+		if proxyProtocols[stringOf(ob["protocol"])] && stringOf(ob["tag"]) != "" {
+			return "outboundTag", stringOf(ob["tag"]), true
+		}
+	}
+	return key, tag, false
 }
 
 // dnsOverTCP: "9.9.9.9" (DNS over UDP) becomes "tcp://9.9.9.9:53"; DoH, local and other servers

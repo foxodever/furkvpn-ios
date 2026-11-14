@@ -258,12 +258,18 @@ func measureTags(cfg map[string]any, tags []string, testURL string, timeout time
 // httpDelay fetches testURL through inst: through the outbound tag, or by the instance's routing
 // when tag is empty.
 func httpDelay(inst *core.Instance, tag string, testURL string, timeout time.Duration) (int64, error) {
+	// The outbound's connection lives as long as the context it is dialed with, and the one net/http dials with
+	// is never cancelled: a test that gave up left the outbound dialing and handshaking for a minute and more
+	// (on an instance already closed). This one ends with the test.
+	testCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	tr := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
 			dest, err := xnet.ParseDestination(network + ":" + addr)
 			if err != nil {
 				return nil, err
 			}
+			ctx := testCtx
 			if tag != "" {
 				ctx = session.SetForcedOutboundTagToContext(ctx, tag)
 			}

@@ -179,6 +179,11 @@ func TestDNSGoesOverTCPSoEachQueryPicksALiveServer(t *testing.T) {
 	if asString(dns["servers"]) != `["tcp://1.1.1.1:53","tcp://8.8.8.8:53"]` {
 		t.Errorf("default dns = %v", dns)
 	}
+	// A dns section with hosts only: the same, and the hosts stay.
+	dns = asMap(buildTunnel(t, `{"outbounds":[{"tag":"proxy","protocol":"vless"}],"dns":{"hosts":{"a.example":"1.2.3.4"}}}`, "")["dns"])
+	if asString(dns["servers"]) != `["tcp://1.1.1.1:53","tcp://8.8.8.8:53"]` || dns["hosts"] == nil {
+		t.Errorf("dns with hosts only = %v", dns)
+	}
 }
 
 func TestTunnelConfigStarts(t *testing.T) {

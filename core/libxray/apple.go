@@ -5,6 +5,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Calls for the iOS app (Swift through gomobile): no error values or numbers paired with errors,
@@ -111,13 +112,22 @@ type autoSelectHealth struct {
 	mu sync.Mutex
 	// Auto-select servers that were carrying traffic at the last look (the two fastest).
 	inUse []string
+	// The last time all its servers were checked out of turn (RecheckServers).
+	lastRecheck time.Time
 }
 
 var autoSelect autoSelectHealth
 
+// recheckEvery spaces the checks out of turn. A check of a server that doesn't answer (all of them, under
+// white lists or behind a captive Wi-Fi) leaves its connection attempt running after the check gave up: the
+// observatory dials with a context that lives as long as the core. Once every 10 s that piled up hundreds of
+// goroutines and tens of MB in the tunnel's extension, which iOS kills at about 50 MB.
+const recheckEvery = time.Minute
+
 func (h *autoSelectHealth) reset() {
 	h.mu.Lock()
 	h.inUse = nil
+	h.lastRecheck = time.Time{}
 	h.mu.Unlock()
 }
 
@@ -151,6 +161,7 @@ func (h *autoSelectHealth) check(afterSleep bool, observe func() []serverCheck, 
 	defer h.mu.Unlock()
 	if afterSleep {
 		recheck()
+		h.lastRecheck = time.Now()
 	}
 	checks := observe()
 	if len(checks) == 0 {
@@ -158,20 +169,19 @@ func (h *autoSelectHealth) check(afterSleep bool, observe func() []serverCheck, 
 	}
 	lost := h.lost(h.inUse, checks)
 	if !afterSleep && (len(lost) > 0 || !anyAlive(checks)) {
-		// One failed check can be a hiccup: look again before dropping connections.
+		// One failed check can be a hiccup: look again before dropping connections — but not again so soon
+		// (recheckEvery); until then nothing is decided.
+		if time.Since(h.lastRecheck) < recheckEvery {
+			return autoSelectResult{Best: bestOf(checks)}
+		}
 		recheck()
+		h.lastRecheck = time.Now()
 		if checks = observe(); len(checks) == 0 {
 			return autoSelectResult{}
 		}
 		lost = h.lost(lost, checks)
 	}
-	var alive []serverCheck
-	for _, c := range checks {
-		if c.Alive {
-			alive = append(alive, c)
-		}
-	}
-	sort.SliceStable(alive, func(i, j int) bool { return alive[i].Delay < alive[j].Delay })
+	alive := aliveByDelay(checks)
 	var result autoSelectResult
 	if len(alive) > 0 {
 		result.Best = alive[0].Tag
@@ -182,6 +192,25 @@ func (h *autoSelectHealth) check(afterSleep bool, observe func() []serverCheck, 
 	}
 	result.Restart = len(lost) > 0 || len(alive) == 0
 	return result
+}
+
+// aliveByDelay returns the servers that answer, fastest first.
+func aliveByDelay(checks []serverCheck) []serverCheck {
+	var alive []serverCheck
+	for _, c := range checks {
+		if c.Alive {
+			alive = append(alive, c)
+		}
+	}
+	sort.SliceStable(alive, func(i, j int) bool { return alive[i].Delay < alive[j].Delay })
+	return alive
+}
+
+func bestOf(checks []serverCheck) string {
+	if alive := aliveByDelay(checks); len(alive) > 0 {
+		return alive[0].Tag
+	}
+	return ""
 }
 
 // lost returns the tags that the checks see as not answering.

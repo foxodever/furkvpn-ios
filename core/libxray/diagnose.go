@@ -135,6 +135,9 @@ func DebugErrors(lines int) string {
 	debugLog.mu.Lock()
 	defer debugLog.mu.Unlock()
 	list := debugLog.lines
+	if lines < 0 {
+		lines = 0
+	}
 	if len(list) > lines {
 		list = list[len(list)-lines:]
 	}

@@ -25,4 +25,7 @@ func TestDebugLogKeepsWarningsAndConnections(t *testing.T) {
 	if n := strings.Count(out, "again"); n != debugLogLines {
 		t.Errorf("%d error lines kept", n)
 	}
+	if DebugErrors(-1) != "" || strings.Count(DebugErrors(2), "again") != 2 {
+		t.Error("DebugErrors with odd counts")
+	}
 }
