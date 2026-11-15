@@ -127,6 +127,15 @@ while IFS='|' read -r label type runtime title; do
   else
     case $label in ipad*) wide=wide ;; *) wide= ;; esac
     scenarios "$udid" "$label" "" "$wide"
+    # Settings → «Стекло»: matte glass and no glass next to the liquid shots above (one iPhone, dark theme).
+    if [ "$label" = pro ]; then
+      xcrun simctl ui "$udid" appearance dark
+      for glass in matte flat; do
+        shoot "$udid" "pro-dark-$glass-3-connected" "" -demo -demoConnected -demoGlass "$glass"
+        shoot "$udid" "pro-dark-$glass-4-servers" "" -demo -demoConnected -demoServers -demoGlass "$glass"
+        shoot "$udid" "pro-dark-$glass-5-settings" "" -demo -demoSettings -demoGlass "$glass"
+      done
+    fi
   fi
   xcrun simctl shutdown "$udid" || true
   xcrun simctl delete "$udid" || true

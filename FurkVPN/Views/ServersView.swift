@@ -14,16 +14,15 @@ struct ServersView: View {
             }
             .navigationTitle("Серверы")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if model.pinging { ProgressView() }
-                    // Stays enabled while pinging: pressing it again starts over.
-                    Button { model.testPings() } label: { Label("Проверить пинг", systemImage: "bolt.horizontal.circle") }
-                }
+            .barItem(.cancellationAction) { Button("Закрыть") { dismiss() } }
+            .barGroup(.primaryAction) {
+                if model.pinging { ProgressView() }
+                // Stays enabled while pinging: pressing it again starts over.
+                Button { model.testPings() } label: { Label("Проверить пинг", systemImage: "bolt.horizontal.circle") }
             }
         }
         .navigationViewStyle(.stack)
+        .sheetGlass()
     }
 }
 

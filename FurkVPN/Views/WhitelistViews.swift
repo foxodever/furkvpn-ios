@@ -136,10 +136,9 @@ private struct WhitelistSheet: View {
             }
             .navigationTitle("Белые списки")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Закрыть") { dismiss() } }
-            }
+            .barItem(.confirmationAction) { Button("Закрыть") { dismiss() } }
         }
+        .sheetGlass()
     }
 
     private func probes(_ title: String, _ results: [ProbeResult]) -> some View {

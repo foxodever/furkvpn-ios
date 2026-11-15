@@ -37,10 +37,10 @@ struct HomeView: View {
                 ToolbarItem(placement: .principal) {
                     Image("Logo").resizable().scaledToFit().frame(height: 26).foregroundColor(.primary)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    // Title and icon: on the iPhone Duo the bar may stand vertically at the side.
-                    Button { model.settingsOpen = true } label: { Label("Настройки", systemImage: "gearshape") }
-                }
+            }
+            .barItem(.navigationBarTrailing) {
+                // Title and icon: on the iPhone Duo the bar may stand vertically at the side.
+                Button { model.settingsOpen = true } label: { Label("Настройки", systemImage: "gearshape") }
             }
         }
         .navigationViewStyle(.stack)

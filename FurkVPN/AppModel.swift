@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 import UserNotifications
@@ -103,6 +104,8 @@ final class AppModel: ObservableObject {
     /** The newest white list switch already told about. */
     private var toldSwitchAt = Date()
     private var sharedObserver: NSObjectProtocol?
+    /** Keeps the widgets up to date (watchWidgets). */
+    private var widgetWatch: AnyCancellable?
 
     init() {
         config = Store.loadRemoteConfig()?.sanitized() ?? RemoteConfig()
@@ -122,6 +125,7 @@ final class AppModel: ObservableObject {
         PhysicalNetwork.shared.onChange = { [weak self] in
             Task { @MainActor in self?.networkChanged() }
         }
+        watchWidgets()
         // The extension checked for white lists and maybe moved the server.
         SharedChange.observe()
         sharedObserver = NotificationCenter.default.addObserver(forName: SharedChange.local, object: nil, queue: .main) { [weak self] _ in
@@ -138,6 +142,7 @@ final class AppModel: ObservableObject {
             pings = Demo.pings
             selectedKey = Demo.subscription.servers.first?.key
             serversOnLeft = Demo.serversLeft
+            Store.defaults.set(Demo.glass, forKey: GlassStyle.key)
         }
         #endif
     }
@@ -145,6 +150,52 @@ final class AppModel: ObservableObject {
     var selectedServer: ServerEntry? {
         guard let list = subscription?.selectable else { return nil }
         return list.first { $0.key == selectedKey } ?? list.first
+    }
+
+    // MARK: Widgets
+
+    /**
+     * What the widgets show (Shared/WidgetSnapshot.swift), from the key, the plan, the server and the VPN's
+     * state — once the VPN profile has been read: before that the state is idle whatever the VPN does. The
+     * tunnel extension writes its own changes too (on, off, another server), for when the app isn't running.
+     */
+    private func watchWidgets() {
+        #if DEMO
+        if Demo.on { return }
+        #endif
+        widgetWatch = Publishers.CombineLatest4($subscription, $account, $selectedKey, vpn.$state.dropFirst())
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { subscription, account, selectedKey, state in
+                let server = subscription?.selectable.first { $0.key == selectedKey } ?? subscription?.selectable.first
+                let found = account?.found == true
+                let isFree = found && account?.isFree == true
+                let expiresAt = (found ? account?.expiresAt : subscription?.expire).flatMap { $0 > 0 ? $0 : nil }
+                // As on the plan card of the main screen.
+                var plan: String?
+                if subscription != nil {
+                    if isFree {
+                        plan = "Бесплатный тариф"
+                    } else if found, let name = account?.planName {
+                        plan = "Тариф «\(name)»"
+                    } else {
+                        plan = "Ваша подписка"
+                    }
+                }
+                WidgetState.change { s in
+                    s.hasKey = subscription != nil
+                    s.server = server?.displayName
+                    s.plan = plan
+                    s.expires = expiresAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    s.endless = subscription != nil && expiresAt == nil && !isFree
+                    switch state {
+                    case .connected(let since):
+                        s.vpn = .on
+                        s.since = since
+                    case .connecting: s.vpn = .connecting
+                    case .idle, .stopping: s.vpn = .off
+                    }
+                }
+            }
     }
 
     func show(_ message: String) {

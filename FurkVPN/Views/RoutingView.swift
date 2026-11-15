@@ -137,13 +137,12 @@ private struct AddRulesSheet: View {
             }
             .navigationTitle("Добавить в «\(action.title)»")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Добавить") { add() }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+            .barItem(.cancellationAction) { Button("Отмена") { dismiss() } }
+            .barItem(.confirmationAction) {
+                Button("Добавить") { add() }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+        .sheetGlass()
     }
 
     private func prefixButton(_ title: String, _ prefix: String) -> some View {

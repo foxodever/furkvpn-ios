@@ -18,10 +18,19 @@ xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Release \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
 APP="$OUT/dd/Build/Products/Release-iphoneos/FurkVPN.app"
 rm -rf "$OUT/Payload" && mkdir -p "$OUT/Payload" && cp -R "$APP" "$OUT/Payload/"
-codesign -f -s - --entitlements FurkTunnel/FurkTunnel.entitlements "$OUT/Payload/FurkVPN.app/PlugIns/FurkTunnel.appex"
-# The Control Center button (no entitlements needed).
+# Without the keychain groups of Furry LLC's team (the widgets' state): a build signed by someone else can't
+# have them, and with them the device id could move to another keychain group. The widgets then only say to
+# open the app.
+adhoc() {
+  cp "$1" "$OUT/adhoc.entitlements"
+  /usr/libexec/PlistBuddy -c 'Delete :keychain-access-groups' "$OUT/adhoc.entitlements" 2>/dev/null || true
+  echo "$OUT/adhoc.entitlements"
+}
+codesign -f -s - --entitlements "$(adhoc FurkTunnel/FurkTunnel.entitlements)" "$OUT/Payload/FurkVPN.app/PlugIns/FurkTunnel.appex"
+# The widgets and the Control Center button.
 codesign -f -s - "$OUT/Payload/FurkVPN.app/PlugIns/FurkWidget.appex"
-codesign -f -s - --entitlements FurkVPN/FurkVPN.entitlements "$OUT/Payload/FurkVPN.app"
+codesign -f -s - --entitlements "$(adhoc FurkVPN/FurkVPN.entitlements)" "$OUT/Payload/FurkVPN.app"
+rm -f "$OUT/adhoc.entitlements"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$OUT/Payload/FurkVPN.app/Info.plist")
 (cd "$OUT" && rm -f FurkVPN-*.ipa && zip -qry "FurkVPN-$VERSION-unsigned.ipa" Payload)
 ls -la "$OUT"/FurkVPN-*.ipa

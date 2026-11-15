@@ -40,6 +40,12 @@ enum TunnelSwitch {
         var options: [String: NSObject] = [:]
         if let payload = TunnelPayload.fromStore() { options[TunnelPayload.key] = payload.encoded() as NSData }
         try manager.connection.startVPNTunnel(options: options)
+        // The widgets, until the tunnel says it is on (it may have been quicker than this).
+        let server = Store.selectedEntry(in: Store.loadSubscription())?.displayName
+        WidgetState.change { s in
+            if s.vpn != .on { s.vpn = .connecting }
+            s.server = server ?? s.server
+        }
     }
 
     /** Off, and stays off: an on-demand rule would start it again. */
@@ -49,6 +55,7 @@ enum TunnelSwitch {
             try await manager.saveToPreferences()
         }
         manager.connection.stopVPNTunnel()
+        WidgetState.change { $0.vpn = .off }
     }
 
     /** On when off, off when on or on the way: what the Shortcuts toggle and the Control Center button do. */

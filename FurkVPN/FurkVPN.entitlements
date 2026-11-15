@@ -10,5 +10,10 @@
 	<array>
 		<string>group.com.furkvpn.app</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>2N5KR68546.com.furkvpn.app</string>
+		<string>2N5KR68546.com.furkvpn.shared</string>
+	</array>
 </dict>
 </plist>

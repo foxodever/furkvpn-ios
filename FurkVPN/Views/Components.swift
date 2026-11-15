@@ -269,10 +269,9 @@ struct SupportSheet: View {
             }
             .navigationTitle("Поддержка")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Закрыть") { dismiss() } }
-            }
+            .barItem(.confirmationAction) { Button("Закрыть") { dismiss() } }
         }
+        .sheetGlass()
     }
 
     private func icon(_ type: String) -> String {
@@ -305,10 +304,9 @@ struct TelegramProxiesSheet: View {
             }
             .navigationTitle("Прокси для Telegram")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Закрыть") { dismiss() } }
-            }
+            .barItem(.confirmationAction) { Button("Закрыть") { dismiss() } }
         }
+        .sheetGlass()
     }
 }
 
@@ -330,17 +328,16 @@ struct ManualKeySheet: View {
             }
             .navigationTitle("Введите ключ")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Добавить") {
-                        dismiss()
-                        onAdd(text)
-                    }
-                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+            .barItem(.cancellationAction) { Button("Отмена") { dismiss() } }
+            .barItem(.confirmationAction) {
+                Button("Добавить") {
+                    dismiss()
+                    onAdd(text)
                 }
+                .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
+        .sheetGlass()
     }
 }
 

@@ -188,6 +188,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     LibxrayDebugNote("started")
                     self.scheduleSelfTest()
                     completionHandler(nil)
+                    // The widgets: on, and with which server (the app may not be running to tell them).
+                    WidgetState.change { s in
+                        s.vpn = .on
+                        s.since = Date()
+                        s.server = payload.serverName
+                        s.hasKey = true
+                    }
                     self.scheduleWhitelistCheck(after: 2)
                 } catch {
                     LibxrayDebugNote("start failed: \(error.localizedDescription)")
@@ -208,6 +215,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.stopWatchers()
             self.stopCore()
             LibxrayDebugNote("stopped")
+            WidgetState.change { $0.vpn = .off }
             // Not stopped by the user: say why (Settings → «Уведомлять об отключении VPN»), then let go.
             var finished = false
             let finish = {
@@ -232,6 +240,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         gaveUp = true
         pauseWatchdog(forGood: true)
         StopNotices.post("FurkVPN отключён", error.localizedDescription)
+        WidgetState.change { $0.vpn = .off }
         cancelTunnelWithError(error)
     }
 
@@ -680,6 +689,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 LibxrayDebugNote("self-test done")
                 self.gaveUp = true
                 self.pauseWatchdog(forGood: true)
+                WidgetState.change { $0.vpn = .off }
                 self.cancelTunnelWithError(Self.failure(summary))
             }
         }
@@ -773,7 +783,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         let probesBefore = payload?.probes ?? []
-        if let next { payload = next }
+        if let next {
+            payload = next
+            // Another server (from the app, a shortcut or the white list check): the widgets show it.
+            WidgetState.change { $0.server = next.serverName }
+        }
         let lanDirect = Self.lanDirect(payload?.routing ?? RoutingSettings())
         // Another server: its addresses (the name servers it was looked up with are out of the routes already).
         // The subscription's are as resolved at the start: usually the new server's are among them. Not on a new

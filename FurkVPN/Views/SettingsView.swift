@@ -103,9 +103,7 @@ struct SettingsView: View {
             }
             .navigationTitle("Настройки")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Готово") { dismiss() } }
-            }
+            .barItem(.confirmationAction) { Button("Готово") { dismiss() } }
             .confirmationDialog("Удалить ключ?", isPresented: $confirmLogout, titleVisibility: .visible) {
                 Button("Удалить ключ", role: .destructive) {
                     model.logout()
@@ -130,12 +128,13 @@ struct SettingsView: View {
             .toast($model.toast)
         }
         .navigationViewStyle(.stack)
+        .sheetGlass()
     }
 
     private var interfaceFooter: Text {
         var lines: [String] = []
         if GlassStyle.available {
-            lines.append("Жидкое стекло само следует настройке iOS: «Прозрачное» или «Тонированное» в iOS 26, ползунок прозрачности в iOS 27, «Понижение прозрачности». Матовое — размытие без преломления, без стекла — плоские карточки и кнопки.")
+            lines.append("Жидкое стекло — как в самой iOS и следует её настройке: «Прозрачное» или «Тонированное» в iOS 26, ползунок прозрачности в iOS 27, «Понижение прозрачности». Матовое — размытие без преломления и бликов. Без стекла — плоские карточки, кнопки и шторки. На тёмном фоне жидкое и матовое стекло почти не отличаются.")
         }
         if wide { lines.append("Список серверов слева удобен левшам — на iPad и раскрытом iPhone Duo.") }
         return Text(lines.joined(separator: "\n\n"))

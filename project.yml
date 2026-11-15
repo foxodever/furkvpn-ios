@@ -12,8 +12,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.3.4"
-    CURRENT_PROJECT_VERSION: "21"
+    MARKETING_VERSION: "1.3.5"
+    CURRENT_PROJECT_VERSION: "22"
     CODE_SIGN_STYLE: Automatic
     ENABLE_BITCODE: NO
     DEAD_CODE_STRIPPING: YES
@@ -38,7 +38,7 @@ targets:
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) FURK_APP"
     dependencies:
       - target: FurkTunnel
-      # The Control Center button (iOS 18); not on the Mac.
+      # The widgets and the Control Center button (iOS 18); not on the Mac.
       - target: FurkWidget
         platformFilter: iOS
       - framework: Frameworks/Libxray.xcframework
@@ -70,14 +70,15 @@ targets:
   FurkWidget:
     type: app-extension
     platform: iOS
-    # Controls are iOS 18; the extension simply isn't loaded on older versions.
+    # Controls are iOS 18; the extension simply isn't loaded on older versions (no widgets there).
     deploymentTarget: "18.0"
-    sources: [FurkWidget, FurkVPN/ControlIntent.swift]
+    sources: [FurkWidget, FurkVPN/ControlIntent.swift, Shared/WidgetSnapshot.swift]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.furkvpn.app.widget
         PRODUCT_NAME: FurkWidget
         INFOPLIST_FILE: FurkWidget/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FurkWidget/FurkWidget.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
     dependencies:

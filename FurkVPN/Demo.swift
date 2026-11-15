@@ -6,7 +6,7 @@ import UIKit
  * Sample data for screenshots in the iOS Simulator and on the Mac (screenshots.sh builds with the DEMO
  * flag; the IPA never contains this). Launch arguments: -demo (sample subscription), -demoWelcome (no key),
  * -demoConnected, -demoServers, -demoSettings (open that screen), -demoServersLeft (the list on the left of
- * a wide window); for the Mac -demoTheme dark|light, -demoWindow 1200x820 (the window's size in points),
+ * a wide window), -demoGlass liquid|matte|flat (Settings → «Стекло»; liquid without it); for the Mac -demoTheme dark|light, -demoWindow 1200x820 (the window's size in points),
  * -demoSnapshot <path> (the app saves a picture of its window there).
  */
 enum Demo {
@@ -17,6 +17,8 @@ enum Demo {
     static var servers: Bool { args.contains("-demoServers") }
     static var settings: Bool { args.contains("-demoSettings") }
     static var serversLeft: Bool { args.contains("-demoServersLeft") }
+    /** The simulator keeps the app's settings between launches: every launch sets the style. */
+    static var glass: String { value("-demoGlass") ?? "liquid" }
 
     private static func value(_ name: String) -> String? {
         guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
