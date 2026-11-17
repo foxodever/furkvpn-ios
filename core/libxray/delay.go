@@ -128,7 +128,8 @@ func proxyOutbounds(cfg map[string]any) []int {
 	var indexes []int
 	for i, o := range outbounds {
 		ob, _ := o.(map[string]any)
-		if p, _ := ob["protocol"].(string); proxyProtocols[p] {
+		// The way to the tunnel extension's ping bridge (PingBridged) is a SOCKS outbound, not a server.
+		if p, _ := ob["protocol"].(string); proxyProtocols[p] && stringOf(ob["tag"]) != pingBridgeDialTag {
 			indexes = append(indexes, i)
 		}
 	}

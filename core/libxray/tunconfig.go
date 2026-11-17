@@ -34,6 +34,9 @@ type tunnelOptions struct {
 	// Where iOS doesn't let the extension past its own tunnel (see compat.go), nothing goes direct:
 	// rules that would send traffic out of the phone directly send it through the server.
 	NoDirect bool `json:"noDirect"`
+	// The tunnel takes every connection of the phone (includeAllNetworks): the app's pings come in through
+	// this bridge (pingbridge.go).
+	Bridge *pingBridge `json:"bridge"`
 }
 
 // routingOptions are Settings → Routing; missing switches take the app's defaults.
@@ -111,11 +114,15 @@ func buildTunnelConfig(source map[string]any, opts tunnelOptions) map[string]any
 		// Binds what the core dials outside the outbounds' own settings too (Xray's dialer controller).
 		tunSettings["autoOutboundsInterface"] = opts.Interface
 	}
-	out["inbounds"] = []any{map[string]any{
+	tunInbounds := []any{map[string]any{
 		"tag": tunTag, "protocol": "tun", "port": 0,
 		"settings": tunSettings,
 		"sniffing": sniffing,
 	}}
+	if opts.Bridge.usable() {
+		tunInbounds = append(tunInbounds, pingBridgeInbound(opts.Bridge))
+	}
+	out["inbounds"] = tunInbounds
 
 	// DNS queries arriving from the TUN are resolved by Xray's DNS module (the panel's "dns" servers).
 	sourceOutbounds, _ := source["outbounds"].([]any)
@@ -154,6 +161,11 @@ func buildTunnelConfig(source map[string]any, opts tunnelOptions) map[string]any
 	rules = append(rules, templateRules...)
 	if opts.NoDirect {
 		rules = withoutDirect(rules, outbounds, templateOutbounds, templateRules)
+	}
+	if opts.Bridge.usable() {
+		// After withoutDirect: the pings go straight out even in compatibility mode.
+		rules = append([]any{pingBridgeRule()}, rules...)
+		outbounds = append(outbounds, pingBridgeOutbound())
 	}
 	routing["rules"] = rules
 	// Auto-select sends traffic to the balancer's fallback until its first checks finish and while

@@ -63,6 +63,11 @@ struct SettingsView: View {
                 Section(footer: Text("iOS сама подключит VPN снова, если он отключится не по вашей команде. Кнопка «Отключить» выключает и это.")) {
                     Toggle("Переподключаться автоматически", isOn: $model.autoReconnect)
                 }
+                if AllNetworks.available {
+                    Section(footer: Text("Уведомления Telegram, WhatsApp, почты и других приложений приходят через VPN, как и остальной трафик телефона. Помогает, когда оператор режет серверы Apple или включает белые списки. Звонки и СМС оператора, AirDrop и часы остаются напрямую. Если VPN включён, он переподключится.")) {
+                        Toggle("Уведомления через VPN", isOn: $model.pushThroughVPN)
+                    }
+                }
                 if wide || GlassStyle.available {
                     Section(header: Text("Интерфейс"), footer: interfaceFooter) {
                         if GlassStyle.available {

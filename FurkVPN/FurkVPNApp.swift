@@ -33,7 +33,7 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .appSettings) {
             Button("Настройки…") { model.settingsOpen = true }
                 .keyboardShortcut(",")
-                .disabled(model.subscription == nil)
+                .disabled(model.subscription == nil || model.consent != .given)
         }
         // One window is enough for a VPN.
         CommandGroup(replacing: .newItem) {}
@@ -46,14 +46,14 @@ struct AppCommands: Commands {
                 }
             }
             .keyboardShortcut(.return, modifiers: .command)
-            .disabled(model.subscription == nil)
+            .disabled(model.subscription == nil || model.consent != .given)
             Divider()
             Button("Проверить пинг") { model.testPings() }
                 .keyboardShortcut("t")
-                .disabled(model.subscription == nil)
+                .disabled(model.subscription == nil || model.consent != .given)
             Button("Обновить подписку") { model.refreshSubscription(showMessage: true) }
                 .keyboardShortcut("r")
-                .disabled(model.subscription == nil || model.refreshing)
+                .disabled(model.subscription == nil || model.refreshing || model.consent != .given)
         }
     }
 }

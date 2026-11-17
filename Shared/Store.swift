@@ -180,6 +180,34 @@ enum Store {
         set { defaults.set(newValue, forKey: "autoReconnect") }
     }
 
+    /**
+     * Settings → «Уведомления через VPN» (on by default): the tunnel takes every connection of the phone,
+     * Apple's push notifications too (VPNController.swift, AllNetworks).
+     */
+    static var pushThroughVPN: Bool {
+        get { defaults.object(forKey: "pushThroughVPN") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "pushThroughVPN") }
+    }
+
+    /** The version of the consent text the app asks for now (ConsentView.swift: raise it when the text says more). */
+    static let consentCurrent = 1
+
+    static var consentGiven: Bool { consentVersion >= consentCurrent }
+
+    /**
+     * The consent to the processing of data asked for on the first start (ConsentView.swift): the version
+     * of the text agreed to (0: none), or declined. A new version of the text is asked for again.
+     */
+    static var consentVersion: Int {
+        get { defaults.integer(forKey: "consentVersion") }
+        set { defaults.set(newValue, forKey: "consentVersion") }
+    }
+
+    static var consentDeclined: Bool {
+        get { defaults.bool(forKey: "consentDeclined") }
+        set { defaults.set(newValue, forKey: "consentDeclined") }
+    }
+
     /** The last error of the tunnel extension, for the app to show. */
     static func setTunnelError(_ message: String?) {
         if let message {

@@ -13,6 +13,10 @@ struct IntentFailure: Error, CustomLocalizedStringResourceConvertible {
 @available(iOS 16.0, *)
 enum TunnelSwitch {
     static func manager() async throws -> NETunnelProviderManager {
+        // Declined (or not asked yet): the app sends nothing and doesn't connect, nor do its shortcuts.
+        guard Store.consentGiven else {
+            throw IntentFailure(localizedStringResource: "Откройте FurkVPN и согласитесь на обработку данных — без неё VPN не работает")
+        }
         let all = try await NETunnelProviderManager.loadAllFromPreferences()
         // The profile is created by the first connection in the app (iOS asks for permission there).
         guard Store.loadSubscription() != nil,

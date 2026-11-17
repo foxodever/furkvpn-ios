@@ -25,6 +25,68 @@ enum TunnelExtension {
     static var id: String { bundleId ?? (Bundle.main.bundleIdentifier ?? "com.furkvpn.app") + ".tunnel" }
 }
 
+/**
+ * Settings → «Уведомления через VPN» (on by default): the tunnel takes every connection of the phone
+ * (includeAllNetworks), Apple's push notifications among them (excludeAPNs off). Without it iOS keeps them —
+ * like some other services of its own — outside any VPN, and where the operator cuts Apple's servers (white
+ * lists) the notifications of Telegram and every other app stop coming. As in Happ and Incy. The operator's
+ * calls and texts, AirDrop, CarPlay and the Watch stay outside (the system's defaults), and the local network
+ * with «Локальная сеть напрямую» (excludeLocalNetworks). What else changes: iOS no longer keeps the addresses
+ * out of the tunnel's routes outside it — the app's pings go through the extension's ping bridge
+ * (core/libxray/pingbridge.go) — and while the tunnel is down but on (connecting, reconnecting) the phone has
+ * no network at all. A profile change applies to the next start of the tunnel.
+ */
+enum AllNetworks {
+    /**
+     * iOS 16.4+ (excludeAPNs), not on a Mac, and only in a build signed by Furry LLC (the App Group is ours):
+     * the extension of a re-signed IPA isn't taken for the tunnel's provider (compatibility mode lives on the
+     * routes left out of the tunnel), and with every connection in the tunnel nothing of it would get out.
+     */
+    static var available: Bool {
+        #if targetEnvironment(macCatalyst)
+        return false
+        #else
+        guard !Platform.isMac, Store.groupId == "group.com.furkvpn.app" else { return false }
+        if #available(iOS 16.4, *) { return true }
+        return false
+        #endif
+    }
+
+    static var on: Bool { available && Store.pushThroughVPN }
+
+    private static var lanDirect: Bool { Store.routing.enabled && Store.routing.lanDirect }
+
+    /** The profile isn't as the settings say (a tunnel started with it runs without them). */
+    static func outdated(_ proto: NETunnelProviderProtocol) -> Bool {
+        #if targetEnvironment(macCatalyst)
+        return false
+        #else
+        return proto.includeAllNetworks != on || (on && proto.excludeLocalNetworks != lanDirect)
+        #endif
+    }
+
+    static func apply(_ proto: NETunnelProviderProtocol) {
+        #if !targetEnvironment(macCatalyst)
+        let on = self.on
+        proto.includeAllNetworks = on
+        proto.excludeLocalNetworks = on && lanDirect
+        if #available(iOS 16.4, *) { proto.excludeAPNs = !on }
+        #endif
+    }
+
+    /** Settings → Диагностика. */
+    static func describe(_ proto: NETunnelProviderProtocol?) -> String {
+        #if targetEnvironment(macCatalyst)
+        return "нет на Mac"
+        #else
+        guard available else { return "недоступно в этой сборке или версии iOS" }
+        guard let proto else { return "профиля нет" }
+        let now = proto.includeAllNetworks ? "весь трафик в туннеле, уведомления Apple через VPN" : "выключено"
+        return outdated(proto) ? now + " (изменится при следующем подключении)" : now
+        #endif
+    }
+}
+
 /** Resumes a continuation once: with the extension's answer, or with what stands for none when it didn't come in time. */
 private final class PendingAnswer<T>: @unchecked Sendable {
     private let lock = NSLock()
@@ -93,6 +155,34 @@ final class VPNController: ObservableObject {
         manager = managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == TunnelExtension.id }
             ?? managers.first
         if let connection = manager?.connection { update(connection) }
+        // «Уведомления через VPN» for starts without the app too (Shortcuts, Settings, on demand): a profile
+        // saved by an earlier build gets it now. A tunnel that is up keeps running as it is.
+        if !isActive, state != .stopping { await saveProfileSettings() }
+    }
+
+    /** The profile as the settings say, when it isn't yet. Only with the tunnel down: a change needs a new start anyway. */
+    private func saveProfileSettings() async {
+        guard let manager, let proto = manager.protocolConfiguration as? NETunnelProviderProtocol, AllNetworks.outdated(proto) else { return }
+        AllNetworks.apply(proto)
+        manager.protocolConfiguration = proto
+        try? await manager.saveToPreferences()
+        try? await manager.loadFromPreferences()
+    }
+
+    /** Settings → «Уведомления через VPN» changed: into the profile now, and a running tunnel starts again with it. */
+    func profileSettingsChanged() async {
+        guard let proto = manager?.protocolConfiguration as? NETunnelProviderProtocol, AllNetworks.outdated(proto) else { return }
+        if isActive {
+            reconnect()
+        } else if state == .idle {
+            await saveProfileSettings()
+        }
+    }
+
+    /** Off and on again (the next start saves the profile with the current settings). */
+    private func reconnect() {
+        connectWhenStopped = true
+        disconnect()
     }
 
     private func update(_ connection: NEVPNConnection) {
@@ -168,6 +258,7 @@ final class VPNController: ObservableObject {
             proto.providerConfiguration = [TunnelPayload.key: payload.encoded()]
         }
         proto.serverAddress = "FurkVPN"
+        AllNetworks.apply(proto)
         manager.protocolConfiguration = proto
         manager.localizedDescription = "FurkVPN"
         manager.isEnabled = true
@@ -292,6 +383,12 @@ final class VPNController: ObservableObject {
      * connecting it waits for the connection: the start may have read the previous server.
      */
     func reload() async {
+        // «Локальная сеть напрямую» or «Уведомления через VPN» changed what the profile has to say: only a new
+        // start of the tunnel takes it.
+        if isActive, let proto = manager?.protocolConfiguration as? NETunnelProviderProtocol, AllNetworks.outdated(proto) {
+            reconnect()
+            return
+        }
         if state == .connecting {
             reloadWhenConnected = true
             return
@@ -342,6 +439,7 @@ final class VPNController: ObservableObject {
             ("Профиль указывает на", proto?.providerBundleIdentifier ?? "—"),
             ("Профиль VPN", status + (manager?.isEnabled == false ? ", выключен" : "")),
             ("App Group", Store.groupId ?? "нет — сервер передаётся при подключении"),
+            ("Уведомления через VPN", AllNetworks.describe(proto)),
             ("Последняя ошибка", lastError ?? Store.tunnelError(since: .distantPast) ?? "—"),
             ("Подпись приложения", SignatureReport.app),
             ("Подпись расширения", SignatureReport.tunnel),

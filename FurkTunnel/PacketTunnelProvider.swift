@@ -97,6 +97,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var sleptAt: Date?
     /** The server auto-select found best a moment ago, to start the next core with it as the fallback. */
     private var autoBest: (serverKey: String, tag: String, at: Date)?
+    /**
+     * Settings → «Уведомления через VPN»: the profile has the tunnel take every connection (includeAllNetworks),
+     * and iOS no longer keeps the addresses out of the routes outside it. The app's pings come to the core through
+     * this bridge instead (core/libxray/pingbridge.go) and go out from here, as the core's own connections do.
+     */
+    private var bridge: PingBridge?
 
     private static let tunIPv4 = "172.19.0.1"
     private static let tunDNS = "172.19.0.2"
@@ -149,6 +155,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         self.payload = payload
+        if (protocolConfiguration as? NETunnelProviderProtocol)?.includeAllNetworks == true {
+            let port = Int(LibxrayFreeLocalPort())
+            bridge = port > 0 ? PingBridge(port: port, user: "furk", pass: UUID().uuidString) : nil
+            LibxrayDebugNote("all networks in the tunnel, ping bridge \(port > 0 ? "on 127.0.0.1:\(port)" : "not started")")
+        }
         // The phone's network first: the core binds its connections to it.
         startPathMonitor()
         let network: String = queue.sync {
@@ -360,7 +371,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // Warnings too: the app's diagnostics screen shows them (DebugLog).
         let interface = coreInterface
         let config = try Core.buildTunnelConfig(raw: pinned.config.isEmpty ? payload.config : pinned.config, options: .init(
-            logLevel: "warning", routing: payload.routing, fallback: fallback, interface: interface, noDirect: compat))
+            logLevel: "warning", routing: payload.routing, fallback: fallback, interface: interface, noDirect: compat, bridge: bridge))
         LibxrayDebugNote("bound to \(interface ?? "nothing")\(compat ? ", compatibility mode" : "")")
         if running { stopCore() }
         LibxrayDebugNote("core starting")
@@ -706,7 +717,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         switch message {
-        case .stats, .addresses:
+        case .stats, .addresses, .bridge:
             // Asked every second while the app is open: noted, they pushed everything else out of the log
             // (150 lines) in a couple of minutes — the lines about the network and the restarts too.
             break
@@ -733,6 +744,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         case .addresses:
             queue.async { completionHandler?(try? JSONEncoder().encode(self.subscription.addresses)) }
+        case .bridge:
+            // Nil without one: the app binds its pings to the phone's interface, as before.
+            queue.async { completionHandler?(self.bridge.flatMap { try? JSONEncoder().encode($0) }) }
         case .whitelist:
             whitelistQueue.async {
                 let check = self.checkWhitelistNow()

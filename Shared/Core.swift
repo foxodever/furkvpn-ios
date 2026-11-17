@@ -104,6 +104,8 @@ enum Core {
         var interface: String?
         /** Compatibility mode of the extension: nothing goes direct, rules that would send traffic direct send it through the server. */
         var noDirect = false
+        /** The tunnel takes every connection: the app's pings come in through this bridge. */
+        var bridge: PingBridge?
     }
 
     /**
@@ -184,6 +186,13 @@ enum Core {
      */
     static func ping(config: String, url: String, timeoutMs: Int32 = 5000, interface: String? = nil) -> Int64? {
         let ms = LibxrayPingVia(config, url, timeoutMs, interface ?? "")
+        return ms >= 0 ? ms : nil
+    }
+
+    /** [ping] while the tunnel takes every connection: the test dials the server through the extension's [bridge]. */
+    static func ping(config: String, url: String, timeoutMs: Int32 = 5000, bridge: PingBridge) -> Int64? {
+        let json = (try? JSONEncoder().encode(bridge)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        let ms = LibxrayPingBridged(config, url, timeoutMs, json)
         return ms >= 0 ? ms : nil
     }
 

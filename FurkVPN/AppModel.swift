@@ -33,6 +33,14 @@ actor AsyncLimiter {
     }
 }
 
+/** The consent to the processing of data (ConsentView.swift). */
+enum Consent: Equatable {
+    /** Not asked yet, or a new version of the text: the card is over the screen. */
+    case ask
+    case declined
+    case given
+}
+
 /** State of the app's screens: subscription, account, servers and their pings, settings. */
 @MainActor
 final class AppModel: ObservableObject {
@@ -89,6 +97,18 @@ final class AppModel: ObservableObject {
             Task { await vpn.setAutoReconnect(on) }
         }
     }
+    /** Settings → «Уведомления через VPN»: a running tunnel starts again with it. */
+    @Published var pushThroughVPN: Bool {
+        didSet {
+            guard pushThroughVPN != oldValue else { return }
+            Store.pushThroughVPN = pushThroughVPN
+            Task { await vpn.profileSettingsChanged() }
+        }
+    }
+    /** Until it is given nothing is sent anywhere: no config, subscription or account requests, no connecting. */
+    @Published private(set) var consent: Consent
+    /** «Купить тариф» and «Продлить» on the plan card (PurchaseRegion). */
+    @Published private(set) var showBuy = PurchaseRegion.phoneInRussia
 
     let vpn = VPNController()
     private var configFetchedAt = Date.distantPast
@@ -106,6 +126,10 @@ final class AppModel: ObservableObject {
     private var sharedObserver: NSObjectProtocol?
     /** Keeps the widgets up to date (watchWidgets). */
     private var widgetWatch: AnyCancellable?
+    /** A key opened from a link (furkvpn://import) before the consent: added once it is given. */
+    private var keyAfterConsent: String?
+    /** The extension's ping bridge while the tunnel takes every connection, asked for before the pings. */
+    private var pingBridge: PingBridge?
 
     init() {
         config = Store.loadRemoteConfig()?.sanitized() ?? RemoteConfig()
@@ -119,6 +143,8 @@ final class AppModel: ObservableObject {
         whitelistCheck = Store.whitelistCheck
         notifyStops = Store.notifyStops
         autoReconnect = Store.autoReconnect
+        pushThroughVPN = Store.pushThroughVPN
+        consent = Store.consentVersion >= Store.consentCurrent ? .given : Store.consentDeclined ? .declined : .ask
         vpn.onError = { [weak self] message in self?.show("Ошибка подключения: \(message)") }
         _ = PhysicalNetwork.shared // starts watching the network before the first ping
         // Operators turn white lists on for mobile data: a new network is worth a check.
@@ -143,8 +169,42 @@ final class AppModel: ObservableObject {
             selectedKey = Demo.subscription.servers.first?.key
             serversOnLeft = Demo.serversLeft
             Store.defaults.set(Demo.glass, forKey: GlassStyle.key)
+            consent = .given
+            // The App Store's screenshots are for every country.
+            showBuy = false
         }
         #endif
+        #if DEMO
+        if Demo.on { return }
+        #endif
+        Task { showBuy = await PurchaseRegion.russia() }
+    }
+
+    // MARK: Consent
+
+    func acceptConsent() {
+        Store.consentVersion = Store.consentCurrent
+        Store.consentDeclined = false
+        consent = .given
+        // What the start would have done.
+        onResume()
+        if let key = keyAfterConsent {
+            keyAfterConsent = nil
+            submitKey(key)
+        }
+    }
+
+    /** Nothing more is sent, and the VPN goes off (with auto-reconnect, which would bring it back). */
+    func declineConsent() {
+        Store.consentDeclined = true
+        consent = .declined
+        keyAfterConsent = nil
+        if vpn.state != .idle { vpn.disconnect() }
+    }
+
+    /** The screen of the declined consent: the card again. */
+    func reviewConsent() {
+        consent = .ask
     }
 
     var selectedServer: ServerEntry? {
@@ -211,6 +271,7 @@ final class AppModel: ObservableObject {
 
     /** Called whenever the app comes to the foreground, the first time right after start. */
     func onResume() {
+        guard consent == .given else { return }
         // The start and the first "active" come together: once is enough.
         guard Date().timeIntervalSince(lastResume) > 2 else { return }
         lastResume = Date()
@@ -276,6 +337,10 @@ final class AppModel: ObservableObject {
     // MARK: Keys
 
     func submitKey(_ text: String?) {
+        guard consent == .given else {
+            keyAfterConsent = text
+            return
+        }
         guard !importing else { return }
         // The QR code of a TV (scanned here or opened from the camera app): send it our key.
         if let code = Core.tvCode(text) {
@@ -530,7 +595,9 @@ final class AppModel: ObservableObject {
         reloadTask?.cancel()
         reloadTask = Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            guard !Task.isCancelled, vpn.isActive else { return }
+            guard !Task.isCancelled else { return }
+            // «Локальная сеть напрямую» is in the profile too while the tunnel takes every connection.
+            guard vpn.isActive else { return await vpn.profileSettingsChanged() }
             await vpn.reload()
         }
     }
@@ -587,12 +654,21 @@ final class AppModel: ObservableObject {
      * With the VPN on, a ping gets past the tunnel only to an address out of its routes: the tests connect to
      * the addresses the extension resolved the servers to and left out (and don't look the names up through
      * the tunnel). Without the VPN, or from an older extension that doesn't answer, the names are looked up.
+     * While the tunnel takes every connection («Уведомления через VPN») iOS keeps nothing out of it: the tests
+     * go through the extension's ping bridge instead.
      */
     private func useServerAddresses() async {
         var addresses: [String: String] = [:]
-        if vpn.isConnected, let data = await vpn.send(.addresses) {
-            addresses = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        var bridge: PingBridge?
+        if vpn.isConnected {
+            if let data = await vpn.send(.addresses) {
+                addresses = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+            }
+            if let data = await vpn.send(.bridge, timeout: 5) {
+                bridge = try? JSONDecoder().decode(PingBridge.self, from: data)
+            }
         }
+        pingBridge = bridge
         Core.setServerAddresses(addresses)
     }
 
@@ -605,10 +681,14 @@ final class AppModel: ObservableObject {
         measuring.insert(entry.key)
         defer { measuring.remove(entry.key) }
         let url = config.delayTestUrl
-        let interface = vpn.isActive ? PhysicalNetwork.shared.interfaceName : nil
+        let bridge = vpn.isActive ? pingBridge : nil
+        let interface = vpn.isActive && bridge == nil ? PhysicalNetwork.shared.interfaceName : nil
         var ms: Int64?
         if let raw = Store.config(for: entry.key) {
-            ms = await Task.detached(priority: .userInitiated) { Core.ping(config: raw, url: url, interface: interface) }.value
+            ms = await Task.detached(priority: .userInitiated) {
+                if let bridge { return Core.ping(config: raw, url: url, bridge: bridge) }
+                return Core.ping(config: raw, url: url, interface: interface)
+            }.value
         }
         pings[entry.key] = ms.map(Ping.ok) ?? .failed
     }

@@ -76,9 +76,17 @@ private extension Color {
 struct StatusView: View {
     let entry: StatusEntry
     @Environment(\.widgetFamily) private var family
+    /** Not .fullColor: the tinted or clear home screen (iOS 18+, 26+) and the Lock Screen, all in one color. */
+    @Environment(\.widgetRenderingMode) private var renderingMode
 
     private var state: WidgetSnapshot? { entry.state }
     private var on: Bool { state?.vpn == .on }
+
+    /** The server without its flag where the widget is in one color: an emoji comes out as a blot of it. */
+    private var server: String? {
+        guard let name = state?.server else { return nil }
+        return renderingMode == .fullColor ? name : WidgetText.withoutEmoji(name)
+    }
 
     private var title: String {
         switch state?.vpn {
@@ -186,8 +194,8 @@ struct StatusView: View {
             Text(planLine).font(.caption).lineLimit(1).minimumScaleFactor(0.75)
                 .foregroundStyle(expired ? Color.red : Color.secondary)
         }
-        if let server = state?.server {
-            Text(server).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+        if let server {
+            Text(server).font(.caption).lineLimit(1).minimumScaleFactor(0.85).foregroundStyle(.secondary)
         }
     }
 
@@ -215,7 +223,7 @@ struct StatusView: View {
                 .font(.headline).widgetAccentable()
             if ready {
                 Text(title).font(.caption)
-                if let server = state?.server { Text(server).font(.caption).lineLimit(1) }
+                if let server { Text(server).font(.caption).lineLimit(1) }
                 else if let planLine { Text(planLine).font(.caption).lineLimit(1) }
             } else {
                 Text("Откройте приложение").font(.caption)
@@ -225,21 +233,55 @@ struct StatusView: View {
     }
 }
 
-/** The round button of the home screen widgets: filled with the accent color while the VPN is on. */
+/**
+ * The round button of the home screen widgets: filled with the accent color while the VPN is on. On a tinted or
+ * clear home screen iOS draws the widget in one color — the filled circle and its icon came out as one blot of
+ * it, with no icon to be seen: there the circle is faint (fuller when on) and only the icon takes the tint.
+ */
 private struct PowerButton: View {
     var on: Bool
     var size: CGFloat
+    @Environment(\.widgetRenderingMode) private var renderingMode
+
+    private var fullColor: Bool { renderingMode == .fullColor }
 
     var body: some View {
         Button(intent: ToggleVPNControlIntent()) {
             Image(systemName: "power")
                 .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(on ? Color.furkOnAccent : Color.furkAccent)
+                .foregroundStyle(fullColor ? (on ? Color.furkOnAccent : Color.furkAccent) : Color.white)
+                .widgetAccentable(!fullColor)
                 .frame(width: size, height: size)
-                .background(Circle().fill(on ? Color.furkAccent : Color.furkCard))
+                .background(disc)
         }
         .buttonStyle(.plain)
-        .widgetAccentable()
         .accessibilityLabel(on ? "Отключить VPN" : "Подключить VPN")
+    }
+
+    @ViewBuilder
+    private var disc: some View {
+        if fullColor {
+            Circle().fill(on ? Color.furkAccent : Color.furkCard)
+        } else {
+            Circle().fill(Color.white.opacity(on ? 0.3 : 0.1))
+                .overlay(Circle().strokeBorder(Color.white.opacity(on ? 0 : 0.35), lineWidth: 1.5))
+        }
+    }
+}
+
+enum WidgetText {
+    /** "🇪🇺 Автовыбор Wi-Fi 🎲" → "Автовыбор Wi-Fi"; the name as it is when nothing else is left. */
+    static func withoutEmoji(_ text: String) -> String {
+        var kept = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            let emoji = scalar.properties.isEmojiPresentation
+                || (0x1F000...0x1FAFF).contains(v) // flags (regional indicators), pictographs
+                || (0xE0020...0xE007F).contains(v) // tags of subdivision flags
+                || v == 0xFE0F || v == 0x200D || v == 0x20E3 // emoji style, joiner, keycap
+            if !emoji { kept.append(scalar) }
+        }
+        let words = String(kept).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return words.isEmpty ? text : words
     }
 }

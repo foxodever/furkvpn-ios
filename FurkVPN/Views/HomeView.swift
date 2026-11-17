@@ -307,7 +307,10 @@ private struct ServerCard: View {
     }
 }
 
-/** Plan, expiry and traffic; "Продлить" two days before the end, "Купить тариф" on the free plan. */
+/**
+ * Plan, expiry and traffic; "Продлить" two days before the end, "Купить тариф" on the free plan — both only in
+ * Russia (PurchaseRegion): elsewhere the App Store doesn't allow links to pay outside it.
+ */
 private struct AccountCard: View {
     @EnvironmentObject private var model: AppModel
 
@@ -346,7 +349,7 @@ private struct AccountCard: View {
                         .foregroundColor(.secondary)
                         .padding(.top, 2)
                 }
-                if isFree || endsSoon {
+                if (isFree || endsSoon) && model.showBuy {
                     Button(isFree ? "Купить тариф" : "Продлить") { openLink(model.renewUrl?.absoluteString) }
                         .glassButtonStyle(prominent: true)
                         .padding(.top, 8)

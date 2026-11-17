@@ -12,10 +12,23 @@ enum TunnelMessage: Codable {
     case addresses
     /** Check for white lists now (WhitelistCheck back, after it switched the server if it had to). */
     case whitelist
+    /** Where the pings go while the tunnel takes every connection (PingBridge back); nil when it doesn't. */
+    case bridge
 
     func encoded() -> Data { (try? JSONEncoder().encode(self)) ?? Data() }
 
     static func decode(_ data: Data) -> TunnelMessage? { try? JSONDecoder().decode(TunnelMessage.self, from: data) }
+}
+
+/**
+ * The tunnel extension's ping bridge (core/libxray/pingbridge.go): a SOCKS inbound of its core on 127.0.0.1
+ * behind this password, with a new one for each start of the tunnel. Only while the tunnel takes every
+ * connection (Settings → «Уведомления через VPN»): the app's pings get past it only this way then.
+ */
+struct PingBridge: Codable, Equatable {
+    var port: Int
+    var user: String
+    var pass: String
 }
 
 struct TunnelStats: Codable {
