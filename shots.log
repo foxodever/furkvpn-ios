@@ -1,0 +1,60 @@
+    |              `- note: add 'self' as a capture list item to silence
+459 |             try? await enqueue { [weak self] in
+    |                                        |- warning: 'weak' ownership of capture 'self' differs from implicitly-captured strong reference in outer scope [#ImplicitStrongCapture]
+    |                                        `- note: explicitly assign the capture list item to silence
+460 |                 guard let self else { return }
+461 |                 Store.clearSubscription()
+
+[#ImplicitStrongCapture]: <https://docs.swift.org/compiler/documentation/diagnostics/implicit-strong-capture>
+/Users/runner/work/furkvpn-ios/furkvpn-ios/FurkVPN.xcodeproj: FurkVPN: ld: warning: search path '/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.zGyA5q/Metal.xctoolchain/usr/lib/swift/maccatalyst' not found
+/Users/runner/work/furkvpn-ios/furkvpn-ios/FurkVPN.xcodeproj: FurkVPN: ld: warning: search path '/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.zGyA5q/Metal.xctoolchain/usr/lib/swift/maccatalyst' not found
+build/mac/Build/Products/Debug-maccatalyst/FurkVPN.app/Contents/PlugIns/FurkTunnel.appex: replacing existing signature
+build/mac/Build/Products/Debug-maccatalyst/FurkVPN.app: replacing existing signature
+Mac: done
+ipad-dark-1-welcome.png
+ipad-dark-2-home.png
+ipad-dark-3-connected.png
+ipad-dark-4-servers.png
+ipad-dark-5-settings.png
+ipad-dark-6-left.png
+ipad-light-1-welcome.png
+ipad-light-2-home.png
+ipad-light-3-connected.png
+ipad-light-4-servers.png
+ipad-light-5-settings.png
+ipad-light-6-left.png
+ipadmini-dark-1-welcome.png
+ipadmini-dark-2-home.png
+ipadmini-dark-3-connected.png
+ipadmini-dark-4-servers.png
+ipadmini-dark-5-settings.png
+ipadmini-dark-6-left.png
+ipadmini-light-1-welcome.png
+ipadmini-light-2-home.png
+ipadmini-light-3-connected.png
+ipadmini-light-4-servers.png
+ipadmini-light-5-settings.png
+ipadmini-light-6-left.png
+mac-dark-1-welcome.png
+mac-dark-2-home-app.png
+mac-dark-2-home.png
+mac-dark-3-connected-app.png
+mac-dark-3-connected.png
+mac-dark-5-settings-app.png
+mac-dark-5-settings.png
+mac-dark-6-left-app.png
+mac-dark-6-left.png
+mac-dark-7-narrow-app.png
+mac-dark-7-narrow.png
+mac-light-1-welcome-app.png
+mac-light-1-welcome.png
+mac-light-2-home-app.png
+mac-light-2-home.png
+mac-light-3-connected-app.png
+mac-light-3-connected.png
+mac-light-5-settings-app.png
+mac-light-5-settings.png
+mac-light-6-left-app.png
+mac-light-6-left.png
+mac-light-7-narrow-app.png
+mac-light-7-narrow.png
