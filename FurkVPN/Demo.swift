@@ -67,7 +67,8 @@ enum Demo {
     static let subscription = SubscriptionInfo(
         url: "https://sub.furkvpn.com/demoDEMOdemo0001",
         title: "FurkVPN | Подписка",
-        announce: "📺 — YouTube без рекламы | 🤖 — работают нейросети | 🏴‍☠️ — можно торренты",
+        // The App Store's screenshots are made from this: no names of other companies' services (rule 5.2.1).
+        announce: "⚡ — самые надёжные | 🤖 — работают нейросети | 🎮 — низкий пинг для игр",
         supportUrl: nil,
         updateIntervalHours: 6,
         upload: 1_200_000_000,
@@ -111,10 +112,15 @@ enum Demo {
 
     static var config: RemoteConfig {
         var c = RemoteConfig()
-        c.telegramProxies = [
-            TelegramProxy(title: "Германия", url: "https://t.me/proxy?server=demo", flag: "🇩🇪"),
-            TelegramProxy(title: "Нидерланды", url: "https://t.me/proxy?server=demo2", flag: "🇳🇱"),
+        // As the API's, without other companies' names (the App Store's screenshots).
+        c.serverFilters = [
+            ServerFilter(emoji: "⚡️", title: "Надёжный"),
+            ServerFilter(emoji: "🎮", title: "Игровой"),
+            ServerFilter(emoji: "📺", title: "Видео"),
+            ServerFilter(emoji: "🤖", title: "Нейросети"),
         ]
+        // No «Прокси для Telegram» card either: another company's name.
+        c.telegramProxies = []
         return c
     }
 
