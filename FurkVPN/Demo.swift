@@ -44,7 +44,11 @@ enum Demo {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
             let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
             guard let window = windows.first(where: \.isKeyWindow) ?? windows.first else { return }
-            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            // Retina size whatever the screen of the build machine (its virtual display is 1×): the App Store
+            // takes the Mac's screenshots at 2880×1800.
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = max(window.screen.scale, 2)
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
                 _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
             }
             try? image.pngData()?.write(to: URL(fileURLWithPath: path))

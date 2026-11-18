@@ -170,7 +170,8 @@ SWIFT
     local name=$1 size=$2; shift 2
     pkill -x FurkVPN || true
     open -n "$app" --args -demoWindow "$size" -demoSnapshot "$PWD/$OUT/$name-app.png" "$@"
-    sleep 8
+    # The app draws itself 5 s after it starts; the first start of a build takes longer.
+    sleep 12
     local id
     if id=$(build/winid FurkVPN); then screencapture -x -o -l "$id" "$OUT/$name.png" || echo "$name: screencapture failed"; else echo "$name: no window"; fi
     pkill -x FurkVPN || true
