@@ -124,6 +124,8 @@ scenarios() {
     shoot "$udid" "$prefix-$theme-2-home" "$display" -demo
     shoot "$udid" "$prefix-$theme-3-connected" "$display" -demo -demoConnected
     shoot "$udid" "$prefix-$theme-4-servers" "$display" -demo -demoConnected -demoServers
+    # The whole list, the sheet pulled up (a wide screen has the list next to the main one, no sheet).
+    if [ -z "$wide" ]; then shoot "$udid" "$prefix-$theme-4-full" "$display" -demo -demoConnected -demoServers -demoServersFull; fi
     shoot "$udid" "$prefix-$theme-5-settings" "$display" -demo -demoSettings
     if [ -n "$wide" ]; then shoot "$udid" "$prefix-$theme-6-left" "$display" -demo -demoConnected -demoServersLeft; fi
   done
@@ -208,6 +210,7 @@ SWIFT
     mac_shoot "mac-$theme-5-settings" 1440x900 -demo -demoSettings -demoTheme "$theme"
     mac_shoot "mac-$theme-6-left" 1440x900 -demo -demoConnected -demoServersLeft -demoTheme "$theme"
     mac_shoot "mac-$theme-7-narrow" 440x820 -demo -demoConnected -demoTheme "$theme"
+    mac_shoot "mac-$theme-8-full" 440x820 -demo -demoConnected -demoServers -demoServersFull -demoTheme "$theme"
   done
   echo "Mac: done"
 }

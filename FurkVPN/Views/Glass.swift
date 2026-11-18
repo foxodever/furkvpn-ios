@@ -240,10 +240,21 @@ extension View {
     @ViewBuilder
     func resizableSheet() -> some View {
         if #available(iOS 16.0, *) {
-            self.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            self.presentationDetents(SheetDetents.resizable).presentationDragIndicator(.visible)
         } else {
             self
         }
+    }
+}
+
+private enum SheetDetents {
+    @available(iOS 16.0, *)
+    static var resizable: Set<PresentationDetent> {
+        #if DEMO
+        // Screenshots of the whole list: the sheet as if pulled all the way up.
+        if Demo.serversFull { return [.large] }
+        #endif
+        return [.medium, .large]
     }
 }
 
