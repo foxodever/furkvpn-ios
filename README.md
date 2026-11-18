@@ -287,8 +287,18 @@ brew install xcodegen
 ./build.sh                    # → build/FurkVPN-<версия>-unsigned.ipa
 ```
 
-Без Mac собирает GitHub Actions (`.github/workflows/ios.yml`, образ `xcode-27`, самый новый Xcode 27 на нём)
-при пуше в `main`: IPA, `FurkVPN-<версия>-mac-unsigned.zip` и концы журналов сборки (`errors-mac.txt`,
+Без Mac собирает **Codemagic** (`codemagic.yaml`, Mac mini M2, Xcode 27.2) — с 2026-11-18: у GitHub Actions
+бесплатные macOS-минуты приватного репозитория кончаются за 5–6 сборок (минута macOS идёт за десять), а оплату
+из России GitHub не принимает. У Codemagic 500 бесплатных минут macOS в месяц, поэтому сборка не стартует на пуш:
+её запускают через API (`POST https://api.codemagic.io/builds`, `appId` 6afce9fa265c8601bb721fc5, `workflowId`
+`ios`, ветка `main`; токен — `/root/furkvpn-secrets/codemagic.token`) или кнопкой в Codemagic. Метки из сообщения
+коммита или `FURK_FLAGS` при запуске: `[testflight]`, `[mac]`, `[shots]`, `[shots-wide]` — как ниже. Секреты
+подписи — в группе переменных `signing` (secure). Ядро пересобирается только при изменении `core/` (кэш
+`Frameworks/` с хэшем исходников). Результаты — артефакты сборки (IPA, Mac zip, `FurkVPN-shots.zip`, журналы)
+через Builds API. Снимки Mac — окно 1440×900 (16:10, размер App Store для Mac).
+
+GitHub Actions (`.github/workflows/ios.yml`, образ `xcode-27`, самый новый Xcode 27 на нём) остался запасным и
+запускается только вручную (`workflow_dispatch`): IPA, `FurkVPN-<версия>-mac-unsigned.zip` и концы журналов сборки (`errors-mac.txt`,
 `build-mac-tail.log` — для Mac) кладутся в ветку `ios-build` (её можно забрать ключом деплоя) и в артефакты
 запуска; `xcode.txt` там же — какие Xcode были на машине и каким собрано. Сборка для Mac — отдельный шаг: если она
 сломается, IPA всё равно будет. Приложение для Mac подписано ad-hoc **без** прав (Mac не запускает приложение,

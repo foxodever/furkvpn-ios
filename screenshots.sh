@@ -177,11 +177,11 @@ SWIFT
     sleep 1
   }
   for theme in dark light; do
-    mac_shoot "mac-$theme-1-welcome" 1200x820 -demo -demoWelcome -demoTheme "$theme"
-    mac_shoot "mac-$theme-2-home" 1200x820 -demo -demoTheme "$theme"
-    mac_shoot "mac-$theme-3-connected" 1200x820 -demo -demoConnected -demoTheme "$theme"
-    mac_shoot "mac-$theme-5-settings" 1200x820 -demo -demoSettings -demoTheme "$theme"
-    mac_shoot "mac-$theme-6-left" 1200x820 -demo -demoConnected -demoServersLeft -demoTheme "$theme"
+    mac_shoot "mac-$theme-1-welcome" 1440x900 -demo -demoWelcome -demoTheme "$theme"
+    mac_shoot "mac-$theme-2-home" 1440x900 -demo -demoTheme "$theme"
+    mac_shoot "mac-$theme-3-connected" 1440x900 -demo -demoConnected -demoTheme "$theme"
+    mac_shoot "mac-$theme-5-settings" 1440x900 -demo -demoSettings -demoTheme "$theme"
+    mac_shoot "mac-$theme-6-left" 1440x900 -demo -demoConnected -demoServersLeft -demoTheme "$theme"
     mac_shoot "mac-$theme-7-narrow" 440x820 -demo -demoConnected -demoTheme "$theme"
   done
   echo "Mac: done"

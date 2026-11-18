@@ -1,0 +1,81 @@
+# Codemagic: the iOS app (and the Mac one) on a Mac mini M2, since GitHub Actions' free macOS minutes ran out
+# (a macOS minute counts as ten on a private repository) and GitHub takes no payment from Russia.
+# The free plan has 500 macOS minutes a month, so nothing starts on a push: a build is started with the API
+# (POST https://api.codemagic.io/builds, appId 6afce9fa265c8601bb721fc5, workflowId "ios", branch "main") or the
+# "Start new build" button. What it does beyond the IPA comes from the commit message, as on GitHub, or from
+# FURK_FLAGS given with the start ("testflight shots mac"):
+#   [testflight]   the App Store build, signed by Furry LLC, to App Store Connect (TestFlight); new build number
+#   [mac]          the Mac app (Mac Catalyst), unsigned zip
+#   [shots]        screenshots on every device: iPhone, iPhone Duo (folded and unfolded), iPad, iPad mini, Mac
+#   [shots-wide]   only iPad, iPad mini and Mac
+# Results: the build's artifacts (IPA, Mac zip, FurkVPN-shots.zip, logs), through the Builds API.
+workflows:
+  ios:
+    name: iOS
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      # 27.1+ SDK: the iPhone Duo; the image has the Duo simulator too.
+      xcode: 27.2
+      groups:
+        # IOS_P12_BASE64, IOS_P12_PASSWORD, ASC_KEY_P8 (build-appstore.sh), secure.
+        - signing
+    cache:
+      cache_paths:
+        - $CM_BUILD_DIR/Frameworks
+        - $HOME/go/pkg/mod
+        - $HOME/Library/Caches/go-build
+    scripts:
+      - name: What to do
+        script: |
+          flags=" ${FURK_FLAGS:-} $(git log -1 --format=%B | grep -oE '\[[a-z-]+\]' | tr -d '[]' | tr '\n' ' ') "
+          echo "Flags:$flags"
+          echo "FURK_RUN=$flags" >> "$CM_ENV"
+      - name: Tools
+        script: |
+          # Go as core/go.mod asks for it; gomobile from the module's own pinned version (core/tools.go).
+          # Unpacked next to GOPATH (~/go), not into it.
+          GO_VERSION=$(awk '/^go /{print $2}' core/go.mod)
+          mkdir -p "$HOME/goroot" && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.darwin-arm64.tar.gz" | tar -xz -C "$HOME/goroot" --strip-components 1
+          echo "PATH=$HOME/goroot/bin:$HOME/go-bin:$PATH" >> "$CM_ENV"
+          export PATH="$HOME/goroot/bin:$PATH"
+          go version
+          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install xcodegen
+          (cd core && GOBIN="$HOME/go-bin" go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind)
+          xcodebuild -version | tee xcode.txt
+      - name: Xray-core for iOS, the Simulator and the Mac
+        script: |
+          # Rebuilt only when core/ changed: the framework stays in the cache with the hash of the sources.
+          hash=$(find core -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) | sort | xargs shasum | shasum | cut -c1-40)
+          if [ -d Frameworks/Libxray.xcframework ] && [ "$(cat Frameworks/core.hash 2>/dev/null)" = "$hash" ]; then
+            echo "Cached framework of $hash"
+          else
+            rm -rf Frameworks && mkdir -p Frameworks
+            (cd core && gomobile init && gomobile bind -target=ios/arm64,iossimulator/arm64,maccatalyst/arm64,maccatalyst/amd64 \
+              -iosversion=15.0 -trimpath -ldflags="-s -w -buildid= -checklinkname=0" -o ../Frameworks/Libxray.xcframework ./libxray) 2>&1 | tee core.log
+            echo "$hash" > Frameworks/core.hash
+          fi
+      - name: The app
+        script: ./build.sh 2>&1 | tee build.log
+      - name: The Mac app
+        script: |
+          case "$FURK_RUN" in *" mac "*) ./build-mac.sh 2>&1 | tee build-mac.log || echo "The Mac app failed" ;; *) echo "No [mac]" ;; esac
+      - name: TestFlight
+        script: |
+          case "$FURK_RUN" in *" testflight "*) ./build-appstore.sh 2>&1 | tee build-appstore.log ;; *) echo "No [testflight]" ;; esac
+      - name: Screenshots
+        script: |
+          case "$FURK_RUN" in
+            *" shots-wide "*) export SHOTS_ONLY="ipad ipadmini mac" ;;
+            *" shots "*) export SHOTS_ONLY="" ;;
+            *) echo "No [shots]"; exit 0 ;;
+          esac
+          ./screenshots.sh 2>&1 | tail -n 80 | tee shots.log
+          if [ -d build/shots ]; then (cd build && zip -qr FurkVPN-shots.zip shots); fi
+    artifacts:
+      - build/FurkVPN-*.ipa
+      - build/FurkVPN-*-mac-unsigned.zip
+      - build/FurkVPN-shots.zip
+      - build/appstore/FurkVPN.ipa
+      - "*.log"
+      - xcode.txt

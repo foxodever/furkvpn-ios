@@ -4,10 +4,9 @@
 # give the job a runner ("not acquired by Runner of type hosted"), the run fails after ~15 minutes
 # without reaching the steps, so nothing comes to "ios-build": push again.
 name: iOS
+# Since 2026-11-18 only by hand: the account's free macOS minutes run out in a few builds, and GitHub takes
+# no payment from Russia. The builds are on Codemagic now (codemagic.yaml); this one is the spare.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ["**.md"]
   workflow_dispatch:
 permissions:
   contents: write
