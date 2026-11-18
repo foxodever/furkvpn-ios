@@ -88,14 +88,32 @@ PLIST
     -Wl,-sectcreate,__TEXT,__entitlements,build/hinge.plist build/hinge.m -o "$HINGE.tmp" &&
     codesign -s - -f "$HINGE.tmp" && mv "$HINGE.tmp" "$HINGE"
 }
-hinge() { build_hinge && xcrun simctl spawn "$1" "$PWD/$HINGE" "$2" < /dev/null && sleep 3; }
+# The display that comes on after the hinge moves takes a while to show anything.
+hinge() { build_hinge && xcrun simctl spawn "$1" "$PWD/$HINGE" "$2" < /dev/null && sleep 10; }
 
+# An empty screenshot: the app still starting, a display still waking up (on Codemagic's slower machines half
+# of them came out white or black after 5 s). A screen of the app compresses to well over 100 KB per megapixel,
+# an empty one to 20–30.
+blank() {
+  local w h bytes
+  w=$(sips -g pixelWidth "$1" | awk '/pixelWidth/{print $2}')
+  h=$(sips -g pixelHeight "$1" | awk '/pixelHeight/{print $2}')
+  bytes=$(stat -f %z "$1")
+  [ "$(( bytes * 1000000 / (w * h) ))" -lt 60000 ]
+}
 # One screenshot: device, file name, display ("" = the only one; the Duo: 1 outer, 3 inner), launch arguments.
+# An empty one is taken again, a few seconds later.
 shoot() {
-  local udid=$1 name=$2 display=$3; shift 3
+  local udid=$1 name=$2 display=$3 try; shift 3
   xcrun simctl launch --terminate-running-process "$udid" com.furkvpn.app "$@" > /dev/null
-  sleep 5
-  xcrun simctl io "$udid" screenshot ${display:+--display=$display} "$OUT/$name.png" > /dev/null
+  sleep 6
+  for try in 1 2 3 4 5 6; do
+    xcrun simctl io "$udid" screenshot ${display:+--display=$display} "$OUT/$name.png" > /dev/null
+    blank "$OUT/$name.png" || return 0
+    echo "$name: empty, again ($try)"
+    sleep 4
+  done
+  echo "$name: STILL EMPTY"
 }
 # Every screen in both themes: device, file name prefix, display, "wide" for the list moved to the left too.
 scenarios() {
