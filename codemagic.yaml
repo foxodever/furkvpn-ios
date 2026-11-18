@@ -3,7 +3,7 @@
 # The free plan has 500 macOS minutes a month, so nothing starts on a push: a build is started with the API
 # (POST https://api.codemagic.io/builds, appId 6afce9fa265c8601bb721fc5, workflowId "ios", branch "main") or the
 # "Start new build" button. What it does beyond the IPA comes from the commit message, as on GitHub, or from
-# FURK_FLAGS given with the start ("testflight shots mac"):
+# FURK_FLAGS given with the start ("testflight shots mac"); markers count in the first line of the message only:
 #   [testflight]   the App Store build, signed by Furry LLC, to App Store Connect (TestFlight); new build number
 #   [mac]          the Mac app (Mac Catalyst), unsigned zip
 #   [shots]        screenshots on every device: iPhone, iPhone Duo (folded and unfolded), iPad, iPad mini, Mac
@@ -28,7 +28,8 @@ workflows:
     scripts:
       - name: What to do
         script: |
-          flags=" ${FURK_FLAGS:-} $(git log -1 --format=%B | grep -oE '\[[a-z-]+\]' | tr -d '[]' | tr '\n' ' ') "
+          # The first line of the commit message only: a message's body may well name the markers.
+          flags=" ${FURK_FLAGS:-} $(git log -1 --format=%s | grep -oE '\[[a-z-]+\]' | tr -d '[]' | tr '\n' ' ') "
           echo "Flags:$flags"
           echo "FURK_RUN=$flags" >> "$CM_ENV"
       - name: Tools
@@ -62,12 +63,14 @@ workflows:
           case "$FURK_RUN" in *" mac "*) ./build-mac.sh 2>&1 | tee build-mac.log || echo "The Mac app failed" ;; *) echo "No [mac]" ;; esac
       - name: TestFlight
         script: |
+          set -o pipefail
           case "$FURK_RUN" in *" testflight "*) ./build-appstore.sh 2>&1 | tee build-appstore.log ;; *) echo "No [testflight]" ;; esac
       - name: Screenshots
         script: |
+          # FURK_SHOTS given with the start: just these devices ("pro max duo ipad ipadmini mac").
           case "$FURK_RUN" in
+            *" shots "*) export SHOTS_ONLY="${FURK_SHOTS:-}" ;;
             *" shots-wide "*) export SHOTS_ONLY="ipad ipadmini mac" ;;
-            *" shots "*) export SHOTS_ONLY="" ;;
             *) echo "No [shots]"; exit 0 ;;
           esac
           ./screenshots.sh 2>&1 | tail -n 80 | tee shots.log
