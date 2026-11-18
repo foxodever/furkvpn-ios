@@ -169,6 +169,9 @@ final class AppModel: ObservableObject {
             selectedKey = Demo.subscription.servers.first?.key
             serversOnLeft = Demo.serversLeft
             Store.defaults.set(Demo.glass, forKey: GlassStyle.key)
+            // No scroll bars on the screenshots (a Mac with a mouse shows them all the time).
+            UIScrollView.appearance().showsVerticalScrollIndicator = false
+            UIScrollView.appearance().showsHorizontalScrollIndicator = false
             consent = .given
             // The App Store's screenshots are for every country.
             showBuy = false

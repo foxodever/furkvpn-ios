@@ -167,6 +167,9 @@ done < build/devices.txt
 # the window as the screen shows it (screencapture, if the runner may record the screen) and as the app
 # draws it itself (-demoSnapshot, *-app.png). Run in an || list (set -e is off there): steps return on failure.
 mac_shots() {
+  # A Mac with no trackpad shows scroll bars all the time; on the screenshots they stood out next to the list
+  # and the cards. Only while scrolling, as on a MacBook.
+  defaults write -g AppleShowScrollBars -string WhenScrolling
   xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Debug \
     -destination 'generic/platform=macOS,variant=Mac Catalyst' -derivedDataPath build/mac \
     ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO \
