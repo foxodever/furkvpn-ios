@@ -210,7 +210,6 @@ SWIFT
     mac_shoot "mac-$theme-5-settings" 1440x900 -demo -demoSettings -demoTheme "$theme"
     mac_shoot "mac-$theme-6-left" 1440x900 -demo -demoConnected -demoServersLeft -demoTheme "$theme"
     mac_shoot "mac-$theme-7-narrow" 440x820 -demo -demoConnected -demoTheme "$theme"
-    mac_shoot "mac-$theme-8-full" 440x820 -demo -demoConnected -demoServers -demoServersFull -demoTheme "$theme"
   done
   echo "Mac: done"
 }
