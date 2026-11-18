@@ -29,7 +29,10 @@ def pick(pattern):
     for runtime in runtimes:
         found = [t for t in runtime.get("supportedDeviceTypes") or d["devicetypes"] if re.search(pattern, t["name"])]
         if found:
-            return found[-1], runtime
+            # The newest model: a runtime supports old ones too (an iPhone 11 Pro Max next to the 18 Pro Max),
+            # and the list isn't in order. By the first iOS it runs on, then by the number in its name.
+            number = lambda t: int((re.findall(r"\d+", t["name"]) or ["0"])[0])
+            return max(found, key=lambda t: (t.get("minRuntimeVersion", 0), number(t))), runtime
     return None, None
 for label, pattern in [("se", r"^iPhone SE"), ("pro", r"^iPhone \d+ Pro$"), ("max", r"^iPhone \d+ Pro Max$"),
                        ("duo", r"^iPhone Duo"), ("ipad", r"^iPad Pro.*13"), ("ipadmini", r"^iPad mini")]:
