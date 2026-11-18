@@ -174,6 +174,7 @@ final class AppModel: ObservableObject {
             UIScrollView.appearance().showsVerticalScrollIndicator = false
             UIScrollView.appearance().showsHorizontalScrollIndicator = false
             consent = .given
+            whitelistCheck = Demo.whitelistCheck
             // The App Store's screenshots are for every country.
             showBuy = false
         }
