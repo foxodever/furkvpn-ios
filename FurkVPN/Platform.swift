@@ -25,6 +25,22 @@ enum Platform {
         return machine.isEmpty ? UIDevice.current.model : machine
     }()
 
+    /**
+     * Installed from the App Store: then the app has no «Диагностика VPN» and no debug mode, they are for
+     * TestFlight and for re-signed IPAs. The App Store leaves a receipt named "receipt" in the app; TestFlight
+     * and App Review a "sandboxReceipt"; Xcode and re-signing tools none. (A Mac's TestFlight receipt is named
+     * "receipt" too: if the Mac app goes to the App Store, tell them apart with AppTransaction.environment.)
+     */
+    static let fromAppStore: Bool = {
+        #if DEMO
+        // The App Store's screenshots show the app as it is there.
+        return true
+        #else
+        guard let receipt = Bundle.main.appStoreReceiptURL else { return false }
+        return receipt.lastPathComponent == "receipt" && FileManager.default.fileExists(atPath: receipt.path)
+        #endif
+    }()
+
     private static func sysctl(_ name: String) -> String? {
         var size = 0
         guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }

@@ -277,7 +277,8 @@ final class VPNController: ObservableObject {
         defer { starting = false }
         userStopped = false
         do {
-            let payload = TunnelPayload.fromStore(debug: Store.debugMode)
+            // Never in the App Store's copy: a TestFlight build's switch may still be on after the update.
+            let payload = TunnelPayload.fromStore(debug: Store.debugMode && !Platform.fromAppStore)
             // Debug mode is for this one connection: its self-test ends it anyway.
             Store.debugMode = false
             let manager = try await preparedManager(payload)

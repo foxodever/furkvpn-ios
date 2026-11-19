@@ -78,11 +78,13 @@ struct SettingsView: View {
                         if wide { Toggle("Список серверов слева", isOn: $model.serversOnLeft) }
                     }
                 }
-                Section(header: Text("Диагностика")) {
-                    NavigationLink(destination: DiagnosticsView()) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Диагностика VPN")
-                            Text("Почему VPN не подключается").font(.caption).foregroundColor(.secondary)
+                if !Platform.fromAppStore {
+                    Section(header: Text("Диагностика")) {
+                        NavigationLink(destination: DiagnosticsView()) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Диагностика VPN")
+                                Text("Почему VPN не подключается").font(.caption).foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
@@ -162,7 +164,10 @@ struct SettingsView: View {
     }
 }
 
-/** Where the VPN can break, mostly after re-signing the IPA: ids, the profile, the App Group, the last error. */
+/**
+ * Where the VPN can break, mostly after re-signing the IPA: ids, the profile, the App Group, the last error.
+ * Not in the App Store's copy of the app (Platform.fromAppStore).
+ */
 private struct DiagnosticsView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vpn: VPNController
