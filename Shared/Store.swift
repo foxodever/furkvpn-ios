@@ -144,6 +144,16 @@ enum Store {
         set { defaults.set(newValue, forKey: "serversOnLeft") }
     }
 
+    /**
+     * Settings → «Проверять пинг при открытии» (on by default, as on Android): the first look at the server list
+     * checks every server. Each check is an Xray core of its own, an auto-select's check knocks on all its servers:
+     * an old iPhone takes a while and its battery feels it.
+     */
+    static var pingOnOpen: Bool {
+        get { defaults.object(forKey: "pingOnOpen") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "pingOnOpen") }
+    }
+
     /** Settings → Диагностика → «Режим отладки VPN», for the next connection only (VPNController.connect). */
     static var debugMode: Bool {
         get { defaults.bool(forKey: "debugMode") }

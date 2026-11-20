@@ -68,6 +68,9 @@ struct SettingsView: View {
                         Toggle("Уведомления через VPN", isOn: $model.pushThroughVPN)
                     }
                 }
+                Section(footer: Text(pingOnOpenFooter)) {
+                    Toggle("Проверять пинг при открытии", isOn: $model.pingOnOpen)
+                }
                 if wide || GlassStyle.available {
                     Section(header: Text("Интерфейс"), footer: interfaceFooter) {
                         if GlassStyle.available {
@@ -136,6 +139,11 @@ struct SettingsView: View {
         }
         .navigationViewStyle(.stack)
         .sheetGlass()
+    }
+
+    private var pingOnOpenFooter: String {
+        let one = Platform.isMac ? "правым кликом по серверу" : "удержанием сервера"
+        return "При первом открытии списка серверов приложение проверяет пинг всех серверов. Это занимает время и расходует батарею — на старых iPhone заметно. Если выключить, пинг проверяется кнопкой «Проверить пинг» или \(one)."
     }
 
     private var interfaceFooter: Text {

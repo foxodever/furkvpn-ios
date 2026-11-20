@@ -71,6 +71,10 @@ final class AppModel: ObservableObject {
     @Published var serversOnLeft: Bool {
         didSet { Store.serversOnLeft = serversOnLeft }
     }
+    /** Settings → «Проверять пинг при открытии»: the server list checks the servers when it is first shown. */
+    @Published var pingOnOpen: Bool {
+        didSet { Store.pingOnOpen = pingOnOpen }
+    }
     /** The settings sheet; also opened from the menu (⌘, on a Mac or an iPad with a keyboard). */
     @Published var settingsOpen = false
     /** The latest white list check (the card on the main screen), by the app or by the extension. */
@@ -140,6 +144,7 @@ final class AppModel: ObservableObject {
         routing = Store.routing
         subscriptionUpdateHours = Store.subscriptionUpdateHours
         serversOnLeft = Store.serversOnLeft
+        pingOnOpen = Store.pingOnOpen
         whitelistDetect = Store.whitelistDetect
         whitelistCheck = Store.whitelistCheck
         notifyStops = Store.notifyStops

@@ -146,8 +146,8 @@ struct ServerList: View {
         .paneBackground(inPane)
         .refreshable { await model.refreshSubscriptionNow(showMessage: true) }
         .task {
-            // The first look at the list checks the servers, like the Android app.
-            if model.pings.isEmpty { model.testPings() }
+            // The first look at the list checks the servers, like the Android app (unless turned off in Settings).
+            if model.pingOnOpen, model.pings.isEmpty { model.testPings() }
         }
     }
 
