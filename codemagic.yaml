@@ -57,7 +57,11 @@ workflows:
             echo "$hash" > Frameworks/core.hash
           fi
       - name: The app
-        script: ./build.sh 2>&1 | tee build.log
+        script: |
+          case "$FURK_RUN" in *" uitest "*) xcodegen generate ;; *) ./build.sh 2>&1 | tee build.log ;; esac
+      - name: UI test
+        script: |
+          case "$FURK_RUN" in *" uitest "*) ./uitest.sh > uitest-full.log 2>&1 || true; grep -n "TAPREPORT" -A200 uitest-full.log | head -n 400 > uitest.log; tail -n 60 uitest-full.log >> uitest.log; cat uitest.log ;; *) echo "No [uitest]" ;; esac
       - name: The Mac app
         script: |
           case "$FURK_RUN" in *" mac "*) ./build-mac.sh 2>&1 | tee build-mac.log || echo "The Mac app failed" ;; *) echo "No [mac]" ;; esac

@@ -84,8 +84,26 @@ targets:
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+  FurkUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [FurkUITests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.furkvpn.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FurkVPN
+    dependencies:
+      - target: FurkVPN
 schemes:
   FurkVPN:
     build:
       targets:
         FurkVPN: all
+  FurkUITests:
+    build:
+      targets:
+        FurkVPN: all
+        FurkUITests: [test]
+    test:
+      targets: [FurkUITests]

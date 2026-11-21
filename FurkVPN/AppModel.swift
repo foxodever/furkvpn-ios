@@ -180,6 +180,7 @@ final class AppModel: ObservableObject {
             UIScrollView.appearance().showsHorizontalScrollIndicator = false
             consent = .given
             whitelistCheck = Demo.whitelistCheck
+            otherVPN = Demo.whitelistStatus == "OTHER_VPN"
             // The App Store's screenshots are for every country.
             showBuy = false
         }

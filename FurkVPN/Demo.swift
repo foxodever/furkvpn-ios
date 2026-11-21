@@ -176,8 +176,11 @@ enum Demo {
     ]
 
     /** The white list card on the screenshots: checked a moment ago, everything works (not «Проверяем…»). */
+    /** -demoWhitelist WHITELIST|NO_INTERNET|UNKNOWN|OTHER_VPN: the white list card in another state (UI tests). */
+    static var whitelistStatus: String? { value("-demoWhitelist") }
+
     static var whitelistCheck: WhitelistCheck {
-        WhitelistCheck(time: Date().addingTimeInterval(-90), status: .allOk, network: "wifi",
+        WhitelistCheck(time: Date().addingTimeInterval(-90), status: WhitelistStatus(rawValue: whitelistStatus ?? "") ?? .allOk, network: "wifi",
                        blocked: [ProbeResult(url: "https://www.google.com/generate_204", host: "www.google.com", ms: 84)],
                        allowed: [ProbeResult(url: "https://ya.ru", host: "ya.ru", ms: 31),
                                  ProbeResult(url: "https://vk.com", host: "vk.com", ms: 42)])
