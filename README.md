@@ -8,7 +8,7 @@ FurkVPN/      приложение: экраны (Views/), подписка и A
               команды для «Быстрых команд» и Siri (Intents.swift), демо-данные для скриншотов (Demo.swift)
 FurkTunnel/   расширение Packet Tunnel: ядро Xray на utun-дескрипторе туннеля
 Shared/       общее для обоих: модели, хранилище в App Group, обёртка над ядром (Core.swift), сообщения
-project.yml   описание проекта для XcodeGen (FurkVPN.xcodeproj в git не хранится)
+project.yml   описание проекта для XcodeGen (FurkVPN.xcodeproj генерируется из него и хранится в git)
 build.sh      сборка на macOS: ядро → Frameworks/Libxray.xcframework, проект, IPA
 build-mac.sh  приложение для Mac (Mac Catalyst) после build.sh → zip
 build-appstore.sh  сборка для App Store, подписанная Furry LLC, и загрузка в TestFlight
@@ -292,6 +292,22 @@ SubscriptionParser, RouteRules, XrayConfigBuilder, TunRoutes, TvPairing) нуж�
 iOS и ядра.
 
 ## Сборка
+
+Для локальной работы в Xcode на Mac есть отдельная необязательная подготовка:
+
+```bash
+brew install go xcodegen
+./setup-xcode.sh
+open FurkVPN.xcodeproj
+```
+
+Скрипт собирает ядро с теми же параметрами, что `build.sh`, и обновляет проект из `project.yml`.
+`FurkVPN.xcodeproj` хранится в git; источником настроек остаётся `project.yml`.
+После изменения спецификации запустите `xcodegen generate` и сохраните обновлённый проект вместе с ней.
+Фреймворк, Go-инструменты и персональные настройки Xcode (`xcuserdata/`) игнорируются Git.
+После изменения `core/`: `REBUILD_CORE=1 ./setup-xcode.sh` (с закрытым Xcode).
+В Xcode выберите схему **FurkVPN** и устройство. Симулятор подходит для интерфейса;
+для VPN нужен физический iPhone/iPad и команда разработчика в Signing & Capabilities всех трёх целей.
 
 Нужны macOS с Xcode, Go (версия из `core/go.mod`), gomobile и XcodeGen:
 
