@@ -43,7 +43,7 @@ enum AllNetworks {
      * routes left out of the tunnel), and with every connection in the tunnel nothing of it would get out.
      */
     static var available: Bool {
-        #if targetEnvironment(macCatalyst)
+        #if targetEnvironment(macCatalyst) || os(tvOS)
         return false
         #else
         guard !Platform.isMac, Store.groupId == "group.com.furkvpn.app" else { return false }
@@ -58,7 +58,7 @@ enum AllNetworks {
 
     /** The profile isn't as the settings say (a tunnel started with it runs without them). */
     static func outdated(_ proto: NETunnelProviderProtocol) -> Bool {
-        #if targetEnvironment(macCatalyst)
+        #if targetEnvironment(macCatalyst) || os(tvOS)
         return false
         #else
         return proto.includeAllNetworks != on || (on && proto.excludeLocalNetworks != lanDirect)
@@ -66,7 +66,7 @@ enum AllNetworks {
     }
 
     static func apply(_ proto: NETunnelProviderProtocol) {
-        #if !targetEnvironment(macCatalyst)
+        #if !targetEnvironment(macCatalyst) && !os(tvOS)
         let on = self.on
         proto.includeAllNetworks = on
         proto.excludeLocalNetworks = on && lanDirect
@@ -76,7 +76,9 @@ enum AllNetworks {
 
     /** Settings → Диагностика. */
     static func describe(_ proto: NETunnelProviderProtocol?) -> String {
-        #if targetEnvironment(macCatalyst)
+        #if os(tvOS)
+        return "нет на Apple TV"
+        #elseif targetEnvironment(macCatalyst)
         return "нет на Mac"
         #else
         guard available else { return "недоступно в этой сборке или версии iOS" }

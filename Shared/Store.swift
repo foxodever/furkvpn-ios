@@ -21,8 +21,18 @@ enum Store {
     }()
 
     static let container: URL = {
+        #if os(tvOS)
+        let url: URL
+        if let groupId, let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupId) {
+            url = shared.appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Caches", isDirectory: true)
+        } else {
+            url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        }
+        #else
         if let groupId, let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupId) { return url }
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #endif
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -50,9 +60,14 @@ enum Store {
         return try? decoder.decode(type, from: data)
     }
 
-    private static func write<T: Encodable>(_ value: T, _ url: URL) {
-        guard let data = try? encoder.encode(value) else { return }
-        try? data.write(to: url, options: .atomic)
+    @discardableResult
+    private static func write<T: Encodable>(_ value: T, _ url: URL) -> Bool {
+        do {
+            try encoder.encode(value).write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: Subscription
@@ -66,9 +81,10 @@ enum Store {
     }
 
     /** [configs][i] is the raw Xray config of [info.servers][i]. */
-    static func saveSubscription(_ info: SubscriptionInfo, configs: [String]) {
+    @discardableResult
+    static func saveSubscription(_ info: SubscriptionInfo, configs: [String]) -> Bool {
         write(SavedConfigs(fetchedAt: info.fetchedAtMs, configs: configs), configsFile)
-        write(info, subscriptionFile)
+            && write(info, subscriptionFile)
     }
 
     static func clearSubscription() {

@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var changeKey = false
     @State private var manual = false
     @State private var scanningTv = false
+    @State private var scannedTvCode: String?
+    @State private var confirmingTvSend = false
     @AppStorage(GlassStyle.key, store: Store.defaults) private var glassStyle = GlassStyle.liquid.rawValue
 
     var body: some View {
@@ -37,7 +39,10 @@ struct SettingsView: View {
                 // The TV's QR code is scanned with this phone's camera (not with a Mac's).
                 if CameraInfo.available && !Platform.isMac {
                     Section(footer: Text("Отсканируйте QR-код с экрана FurkVPN на телевизоре")) {
-                        Button { scanningTv = true } label: { Label("Подключить телевизор", systemImage: "tv") }
+                        Button {
+                            scannedTvCode = nil
+                            scanningTv = true
+                        } label: { Label("Подключить телевизор", systemImage: "tv") }
                     }
                 }
                 Section(header: Text("VPN")) {
@@ -129,16 +134,35 @@ struct SettingsView: View {
                 Button("Отмена", role: .cancel) {}
             }
             .sheet(isPresented: $manual) { ManualKeySheet { model.submitKey($0) } }
-            .fullScreenCover(isPresented: $scanningTv) {
+            .fullScreenCover(isPresented: $scanningTv, onDismiss: confirmScannedTvCode) {
                 ScannerView(title: "Подключить телевизор", hint: "Наведите камеру телефона на QR-код на экране телевизора") {
-                    model.submitKey($0)
+                    scannedTvCode = $0
                 }
+            }
+            .alert("Отправить ключ на телевизор?", isPresented: $confirmingTvSend, presenting: scannedTvCode) { code in
+                Button("Отправить") {
+                    scannedTvCode = nil
+                    model.sendTvKey(code)
+                }
+                Button("Отмена", role: .cancel) { scannedTvCode = nil }
+            } message: { code in
+                Text("Телевизор с кодом \(KeyAlerts.display(code)) подключится к вашей подписке FurkVPN.")
             }
             .keyAlerts()
             .toast($model.toast)
         }
         .navigationViewStyle(.stack)
         .sheetGlass()
+    }
+
+    private func confirmScannedTvCode() {
+        guard let scannedTvCode else { return }
+        self.scannedTvCode = Core.tvCode(scannedTvCode)
+        if self.scannedTvCode == nil {
+            model.show("Это не QR-код подключения телевизора.")
+        } else {
+            confirmingTvSend = true
+        }
     }
 
     private var pingOnOpenFooter: String {

@@ -31,6 +31,7 @@ enum ConsentText {
     ]
 }
 
+#if !os(tvOS)
 struct ConsentCard: View {
     @EnvironmentObject private var model: AppModel
     @State private var details = false
@@ -134,3 +135,4 @@ struct ConsentDeclinedView: View {
         }
     }
 }
+#endif

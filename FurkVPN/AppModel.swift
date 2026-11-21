@@ -481,8 +481,13 @@ final class AppModel: ObservableObject {
     // MARK: TV
 
     func confirmTvSend() {
-        guard let code = tvSend, let key = subscription?.url else { return }
+        guard let code = tvSend, subscription != nil else { return }
         tvSend = nil
+        sendTvKey(code)
+    }
+
+    func sendTvKey(_ code: String) {
+        guard let key = subscription?.url else { return }
         Task {
             var status = 0
             if let url = URL(string: Http.apiBase + "/api/v1/tv/send") {

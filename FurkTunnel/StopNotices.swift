@@ -1,5 +1,13 @@
 import Foundation
 import NetworkExtension
+#if os(tvOS)
+enum StopNotices {
+    static func arm() {}
+    static func disarm() {}
+    static func post(_ title: String, _ body: String, done: (() -> Void)? = nil) { done?() }
+    static func stopped(_ reason: NEProviderStopReason, done: @escaping () -> Void) { done() }
+}
+#else
 import UserNotifications
 
 /**
@@ -79,4 +87,5 @@ enum StopNotices {
         }
     }
 }
+#endif
 

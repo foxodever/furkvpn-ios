@@ -155,11 +155,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         self.payload = payload
+        #if !os(tvOS)
         if (protocolConfiguration as? NETunnelProviderProtocol)?.includeAllNetworks == true {
             let port = Int(LibxrayFreeLocalPort())
             bridge = port > 0 ? PingBridge(port: port, user: "furk", pass: UUID().uuidString) : nil
             LibxrayDebugNote("all networks in the tunnel, ping bridge \(port > 0 ? "on 127.0.0.1:\(port)" : "not started")")
         }
+        #endif
         // The phone's network first: the core binds its connections to it.
         startPathMonitor()
         let network: String = queue.sync {
