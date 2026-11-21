@@ -38,24 +38,6 @@ struct RoutingView: View {
     }
 }
 
-extension RouteAction {
-    var title: String {
-        switch self {
-        case .direct: return "Напрямую"
-        case .proxy: return "Через VPN"
-        case .block: return "Блокировать"
-        }
-    }
-
-    var hint: String {
-        switch self {
-        case .direct: return "Без VPN"
-        case .proxy: return "Даже если сервер отправил бы их напрямую"
-        case .block: return "Эти сайты не будут открываться"
-        }
-    }
-}
-
 private struct RuleSection: View {
     @EnvironmentObject private var model: AppModel
     var action: RouteAction

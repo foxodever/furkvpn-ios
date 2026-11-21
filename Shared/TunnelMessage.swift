@@ -53,7 +53,7 @@ struct TunnelDebug: Codable {
  * The app sends it with the start (and keeps it in the VPN profile), so the tunnel works even when
  * a re-signed build has no shared App Group; with one, the extension can also read the files.
  */
-struct TunnelPayload: Codable {
+struct TunnelPayload: Codable, Equatable {
     var serverKey: String
     var serverName: String
     var config: String

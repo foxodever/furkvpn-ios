@@ -148,6 +148,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // The extension may use about 50 MB; the Go runtime has to collect garbage before that.
         LibxraySetMemoryLimit(32, 50)
         Store.setTunnelError(nil)
+        // With a shared App Group, never start the tunnel or probe the network before consent is given.
+        if Store.groupId != nil, !Store.consentGiven {
+            let error = Self.failure("Откройте FurkVPN и примите условия обработки данных")
+            Store.setTunnelError(error.localizedDescription)
+            completionHandler(error)
+            return
+        }
         guard let payload = startPayload(options) else {
             let error = Self.failure("Нет данных сервера: откройте FurkVPN и подключитесь из приложения")
             Store.setTunnelError(error.localizedDescription)
@@ -798,6 +805,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             done()
             return
         }
+        let serversBefore = payload?.servers ?? []
         let probesBefore = payload?.probes ?? []
         if let next {
             payload = next
@@ -811,9 +819,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // lookup that fails would drop the server's addresses from what stays out of the routes.
         let previous = Set(excluded)
         if let next { pinned = Core.pinTunnelServers(next.config) }
-        // White list detection turned on or off: its sites in or out of the routes.
+        // Subscription replaced/updated or white list detection toggled: refresh excluded server & probe routes.
+        let serversChanged = next.map { ($0.servers ?? []) != serversBefore } ?? false
         let probesChanged = next.map { ($0.probes ?? []) != probesBefore } ?? false
-        if let next, probesChanged {
+        if let next, serversChanged || probesChanged {
             subscription = Core.resolveServers((next.servers ?? []) + (next.probes ?? []))
         }
         // Just turned on: its first check, now that the sites' addresses are known (the one the app asked for
@@ -882,6 +891,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     @discardableResult
     private func checkWhitelistNow() -> WhitelistCheck? {
         guard Store.whitelistDetect else { return nil }
+        // With a shared App Group, never probe when consent has not been given or was declined.
+        if Store.groupId != nil, !Store.consentGiven { return nil }
         let state: (running: Bool, addresses: [String: String], interface: String?, path: Network.NWPath?) =
             queue.sync { (running, subscription.addresses, coreInterface, lastPath) }
         let config = Store.loadRemoteConfig()?.whitelist ?? WhitelistConfig()

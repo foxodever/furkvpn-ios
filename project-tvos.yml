@@ -27,7 +27,12 @@ targets:
       - path: FurkTV
         excludes: ["*.entitlements"]
       - Shared
+      - FurkVPN/AppModel.swift
+      - FurkVPN/Demo.swift
+      - FurkVPN/Format.swift
       - FurkVPN/Http.swift
+      - FurkVPN/OtherVPN.swift
+      - FurkVPN/PhysicalNetwork.swift
       - FurkVPN/Platform.swift
       - FurkVPN/SignatureReport.swift
       - FurkVPN/VPNController.swift
@@ -40,6 +45,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: FurkVPN
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     dependencies:
       - target: FurkTVTunnel
   FurkTVTunnel:

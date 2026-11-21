@@ -1,16 +1,6 @@
 import SwiftUI
 import UIKit
 
-extension Color {
-    static let brandBackground = Color("Background")
-    static let card = Color("Card")
-    static let cardHigh = Color("CardHigh")
-    static let onAccent = Color("OnAccent")
-    static let errorCard = Color("ErrorCard")
-    static let onErrorCard = Color("OnErrorCard")
-    static let good = Color("Good")
-}
-
 /**
  * Rounded block of the main screen, like the Android cards: glass tinted with the card's color on iOS 26 (the
  * same color wherever the card is on the screen), a solid card before. The plan that ran out is red.
@@ -28,12 +18,6 @@ struct CardBackground: ViewModifier {
 
 extension View {
     func card(_ color: Color = .card) -> some View { modifier(CardBackground(color: color)) }
-
-    /**
-     * All the lines the text needs. Without it a text can come out cut to one line with "…" when a stack
-     * is given a fixed height to share (the halves of the wide layout are as tall as the screen).
-     */
-    func wraps() -> some View { fixedSize(horizontal: false, vertical: true) }
 }
 
 /**
@@ -97,53 +81,6 @@ extension View {
 func openLink(_ string: String?) {
     guard let string, let url = URL(string: string.trimmingCharacters(in: .whitespaces)) else { return }
     UIApplication.shared.open(url)
-}
-
-enum Format {
-    static func bytes(_ value: Int64) -> String {
-        let f = ByteCountFormatter()
-        f.countStyle = .file
-        return f.string(fromByteCount: max(value, 0))
-    }
-
-    static func speed(_ bytesPerSecond: Int64) -> String { bytes(bytesPerSecond) + "/с" }
-
-    static func date(_ seconds: Int64) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.dateStyle = .long
-        return f.string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
-    }
-
-    static func dateTime(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        f.doesRelativeDateFormatting = true
-        return f.string(from: date)
-    }
-
-    /** 1 день, 2 дня, 5 дней. */
-    static func days(_ n: Int) -> String { "\(n) " + plural(n, "день", "дня", "дней") }
-
-    static func hours(_ n: Int) -> String { "\(n) " + plural(n, "час", "часа", "часов") }
-
-    static func plural(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {
-        let mod10 = n % 10, mod100 = n % 100
-        if mod10 == 1 && mod100 != 11 { return one }
-        if (2...4).contains(mod10) && !(12...14).contains(mod100) { return few }
-        return many
-    }
-
-    static func ping(_ ping: Ping?, kind: ServerKind?) -> String? {
-        switch ping {
-        case let .ok(ms): return "\(ms) мс"
-        case .failed: return "—"
-        case .testing: return nil
-        case nil: return kind == .auto ? "авто" : nil
-        }
-    }
 }
 
 /**
@@ -371,7 +308,7 @@ struct KeyAlerts: ViewModifier {
 extension KeyAlerts {
     /** "ABC123" → "ABC 123": easier to compare with the TV screen. */
     static func display(_ code: String) -> String {
-        code.count == 6 ? String(code.prefix(3)) + " " + String(code.suffix(3)) : code
+        Format.tvCode(code)
     }
 }
 

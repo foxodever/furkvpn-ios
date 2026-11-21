@@ -129,6 +129,13 @@ final class VPNController: ObservableObject {
     private var connectWhenStopped = false
     /** A connect is saving the profile (iOS may be asking to allow it): a second press waits for it. */
     private var starting = false
+    /** Logout is removing VPN profiles: blocks new connects until cleanup completes. */
+    private var clearing = false
+    /** Incremented by disconnect/logout so an in-flight preparedManager() cannot start a stale tunnel. */
+    private var startEpoch = 0
+    private var startTask: Task<Void, Never>?
+    private var declineTask: Task<Void, Never>?
+    private var syncTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
 
     init() {
@@ -157,6 +164,10 @@ final class VPNController: ObservableObject {
         manager = managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == TunnelExtension.id }
             ?? managers.first
         if let connection = manager?.connection { update(connection) }
+        if Store.consentDeclined {
+            disableForConsentDecline()
+            return
+        }
         // «Уведомления через VPN» for starts without the app too (Shortcuts, Settings, on demand): a profile
         // saved by an earlier build gets it now. A tunnel that is up keeps running as it is.
         if !isActive, state != .stopping { await saveProfileSettings() }
@@ -184,7 +195,7 @@ final class VPNController: ObservableObject {
     /** Off and on again (the next start saves the profile with the current settings). */
     private func reconnect() {
         connectWhenStopped = true
-        disconnect()
+        stopTunnel(clearReconnect: false)
     }
 
     private func update(_ connection: NEVPNConnection) {
@@ -202,11 +213,13 @@ final class VPNController: ObservableObject {
             if connectWhenStopped {
                 connectWhenStopped = false
                 Task { await connect() }
+            } else if !clearing {
+                Task { await syncStoredPayload() }
             }
         }
         if case .connected = state, reloadWhenConnected {
             reloadWhenConnected = false
-            Task { _ = await send(.reload(TunnelPayload.fromStore())) }
+            Task { await self.reload() }
         }
         if state == .idle { reloadWhenConnected = false }
     }
@@ -274,49 +287,251 @@ final class VPNController: ObservableObject {
 
     func connect() async {
         // Pressed twice on the first connection, each press made a VPN profile of its own.
-        guard !starting else { return }
+        guard !starting, !clearing, Store.consentGiven, Store.loadSubscription() != nil else { return }
         starting = true
-        defer { starting = false }
-        userStopped = false
-        do {
-            // Never in the App Store's copy: a TestFlight build's switch may still be on after the update.
-            let payload = TunnelPayload.fromStore(debug: Store.debugMode && !Platform.fromAppStore)
-            // Debug mode is for this one connection: its self-test ends it anyway.
-            Store.debugMode = false
-            let manager = try await preparedManager(payload)
-            startedAt = Date()
-            lastError = nil
-            Store.setTunnelError(nil)
-            state = .connecting
-            // The server's config goes with the start: the extension needs no shared files.
-            var options: [String: NSObject] = [:]
-            if let payload { options[TunnelPayload.key] = payload.encoded() as NSData }
-            try manager.connection.startVPNTunnel(options: options)
-        } catch {
-            state = .idle
-            let nsError = error as NSError
-            if nsError.domain == NEVPNErrorDomain, nsError.code == NEVPNError.configurationReadWriteFailed.rawValue {
-                onError?("Разрешите FurkVPN создать VPN-подключение, чтобы подключиться")
-            } else {
-                onError?(error.localizedDescription)
+        startEpoch += 1
+        let epoch = startEpoch
+        // Capture synchronously before assigning startTask so earlier and later tasks form a strict DAG.
+        let pendingDecline = declineTask
+        let pendingSync = syncTask
+        let task = Task { @MainActor in
+            defer {
+                self.starting = false
+                self.startTask = nil
+            }
+            userStopped = false
+            do {
+                if let pendingDecline { await pendingDecline.value }
+                if let pendingSync { await pendingSync.value }
+                guard epoch == self.startEpoch, Store.consentGiven, Store.loadSubscription() != nil else { return }
+                // Never in the App Store's copy: a TestFlight build's switch may still be on after the update.
+                let debug = Store.debugMode && !Platform.fromAppStore
+                // Debug mode is for this one connection: its self-test ends it anyway.
+                Store.debugMode = false
+                guard var savedPayload = TunnelPayload.fromStore(debug: debug) else {
+                    onError?("Нет данных сервера: обновите подписку и попробуйте снова")
+                    return
+                }
+                var manager = try await preparedManager(savedPayload)
+                // Re-read after every suspending save in case key, server or routing changed mid-flight.
+                while true {
+                    guard epoch == self.startEpoch, Store.consentGiven else { return }
+                    guard let latest = TunnelPayload.fromStore(debug: debug) else {
+                        onError?("Нет данных сервера: обновите подписку и попробуйте снова")
+                        return
+                    }
+                    if latest == savedPayload { break }
+                    savedPayload = latest
+                    manager = try await preparedManager(savedPayload)
+                }
+                startedAt = Date()
+                lastError = nil
+                Store.setTunnelError(nil)
+                state = .connecting
+                // The server's config goes with the start: the extension needs no shared files.
+                let options: [String: NSObject] = [TunnelPayload.key: savedPayload.encoded() as NSData]
+                try manager.connection.startVPNTunnel(options: options)
+            } catch {
+                guard epoch == self.startEpoch else { return }
+                state = .idle
+                let nsError = error as NSError
+                if nsError.domain == NEVPNErrorDomain, nsError.code == NEVPNError.configurationReadWriteFailed.rawValue {
+                    onError?("Разрешите FurkVPN создать VPN-подключение, чтобы подключиться")
+                } else {
+                    onError?(error.localizedDescription)
+                }
             }
         }
+        startTask = task
+        await task.value
     }
 
     func disconnect() {
+        stopTunnel(clearReconnect: true)
+    }
+
+    private func stopTunnel(clearReconnect: Bool) {
+        startEpoch += 1
+        let epoch = startEpoch
+        if clearReconnect { connectWhenStopped = false }
         // With nothing running there is no stop to come, and the flag would hide the next connection's error.
         userStopped = state != .idle
-        guard let manager else { return }
         Task {
+            await loaded()
+            guard epoch == self.startEpoch, let manager else { return }
+            if state != .idle { userStopped = true }
             // Shortcuts and the Control Center button save the profile through their own copy of it: this one
             // may not know that their start turned auto-reconnect on, and iOS would bring the VPN right back.
             try? await manager.loadFromPreferences()
+            guard epoch == self.startEpoch else { return }
             if manager.isOnDemandEnabled {
                 manager.isOnDemandEnabled = false
                 try? await manager.saveToPreferences()
             }
+            guard epoch == self.startEpoch else { return }
             manager.connection.stopVPNTunnel()
         }
+    }
+
+    /** Stops any tunnel, disables saved profiles and clears fallback payloads when consent is declined. */
+    func disableForConsentDecline() {
+        #if DEMO
+        if Demo.on {
+            state = .idle
+            return
+        }
+        #endif
+        startEpoch += 1
+        let epoch = startEpoch
+        connectWhenStopped = false
+        reloadWhenConnected = false
+        userStopped = state != .idle
+        // Capture synchronously before assigning declineTask so earlier and later tasks form a strict DAG.
+        let pendingStart = startTask
+        let pendingSync = syncTask
+        let previousDecline = declineTask
+        declineTask = Task {
+            if let previousDecline { await previousDecline.value }
+            if let pendingStart { await pendingStart.value }
+            if let pendingSync { await pendingSync.value }
+            await loaded()
+            guard epoch == self.startEpoch, !Store.consentGiven else { return }
+            var lastFailure: Error?
+            let managers: [NETunnelProviderManager]
+            do {
+                managers = try await NETunnelProviderManager.loadAllFromPreferences()
+            } catch {
+                // Keep best-effort cleanup of the cached manager, but still surface enumeration failure.
+                lastFailure = error
+                managers = manager.map { [$0] } ?? []
+            }
+            for m in managers {
+                guard epoch == self.startEpoch, !Store.consentGiven else { return }
+                try? await m.loadFromPreferences()
+                guard epoch == self.startEpoch, !Store.consentGiven else { return }
+                if m.connection.status != .disconnected && m.connection.status != .invalid {
+                    userStopped = true
+                }
+                m.isOnDemandEnabled = false
+                m.isEnabled = false
+                if let proto = m.protocolConfiguration as? NETunnelProviderProtocol {
+                    proto.providerConfiguration = nil
+                    m.protocolConfiguration = proto
+                }
+                do {
+                    try await m.saveToPreferences()
+                } catch {
+                    // Fallback: remove the profile outright if disabling/wiping it fails.
+                    do {
+                        try await m.removeFromPreferences()
+                        if m === manager { manager = nil }
+                    } catch {
+                        lastFailure = error
+                    }
+                }
+                m.connection.stopVPNTunnel()
+            }
+            if let lastFailure, epoch == self.startEpoch, !Store.consentGiven {
+                onError?("Не удалось выключить профиль VPN: \(lastFailure.localizedDescription)")
+            }
+        }
+    }
+
+    /** Keeps the saved profile's fallback payload (and enabled flag) current across key, server or routing changes. */
+    func syncStoredPayload() async {
+        #if DEMO
+        if Demo.on { return }
+        #endif
+        let previousSync = syncTask
+        let pendingDecline = declineTask
+        let epoch = startEpoch
+        let task = Task { @MainActor in
+            await previousSync?.value
+            if let pendingDecline { await pendingDecline.value }
+            await loaded()
+            guard epoch == self.startEpoch, !starting, !clearing, Store.consentGiven, let manager else { return }
+            try? await manager.loadFromPreferences()
+            // Re-read the desired payload AFTER all suspensions so an older sync never writes a stale server.
+            guard epoch == self.startEpoch, !starting, !clearing, Store.consentGiven,
+                  let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  var payload = TunnelPayload.fromStore() else { return }
+            payload.debugMode = nil
+            let existing = TunnelPayload.decode(proto.providerConfiguration?[TunnelPayload.key] as? Data)
+            let payloadDiffers = existing != payload
+            let needsEnable = !manager.isEnabled
+            guard payloadDiffers || needsEnable else { return }
+            proto.providerConfiguration = [TunnelPayload.key: payload.encoded()]
+            manager.protocolConfiguration = proto
+            manager.isEnabled = true
+            try? await manager.saveToPreferences()
+            try? await manager.loadFromPreferences()
+        }
+        syncTask = task
+        await task.value
+    }
+
+    /**
+     * Stops the tunnel and removes the saved VPN profile (which stores the server payload in
+     * providerConfiguration) so system VPN settings cannot reconnect after the user deletes the key.
+     */
+    func clearOnLogout() async throws {
+        #if DEMO
+        if Demo.on {
+            state = .idle
+            return
+        }
+        #endif
+        clearing = true
+        defer { clearing = false }
+        startEpoch += 1
+        connectWhenStopped = false
+        reloadWhenConnected = false
+        if let pendingDecline = declineTask {
+            await pendingDecline.value
+        }
+        if let active = startTask {
+            await active.value
+        }
+        if let pendingSync = syncTask {
+            await pendingSync.value
+        }
+        await loaded()
+        let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+        guard !managers.isEmpty else {
+            manager = nil
+            state = .idle
+            return
+        }
+        userStopped = state != .idle
+        var lastFailure: Error?
+        for m in managers {
+            try? await m.loadFromPreferences()
+            if m.isOnDemandEnabled {
+                m.isOnDemandEnabled = false
+                try? await m.saveToPreferences()
+            }
+            m.connection.stopVPNTunnel()
+            do {
+                try await m.removeFromPreferences()
+            } catch {
+                // Fallback: clear stored server credentials even if profile removal itself fails.
+                if let proto = m.protocolConfiguration as? NETunnelProviderProtocol {
+                    proto.providerConfiguration = nil
+                    m.protocolConfiguration = proto
+                    m.isEnabled = false
+                    do {
+                        try await m.saveToPreferences()
+                    } catch {
+                        lastFailure = error
+                    }
+                } else {
+                    lastFailure = error
+                }
+            }
+        }
+        if let lastFailure { throw lastFailure }
+        manager = nil
+        state = .idle
     }
 
     /** Settings → «Переподключаться автоматически» changed: a connected VPN keeps it from now on, otherwise from the next connection. */
@@ -386,21 +601,24 @@ final class VPNController: ObservableObject {
      * connecting it waits for the connection: the start may have read the previous server.
      */
     func reload() async {
+        let epoch = startEpoch
         // «Локальная сеть напрямую» or «Уведомления через VPN» changed what the profile has to say: only a new
         // start of the tunnel takes it.
         if isActive, let proto = manager?.protocolConfiguration as? NETunnelProviderProtocol, AllNetworks.outdated(proto) {
             reconnect()
             return
         }
+        // Keep the saved profile's fallback payload aligned for non-App-Group builds even if the app closes next.
+        await syncStoredPayload()
+        guard epoch == self.startEpoch else { return }
         if state == .connecting {
             reloadWhenConnected = true
             return
         }
-        if await send(.reload(TunnelPayload.fromStore())) == nil, isConnected {
+        if await send(.reload(TunnelPayload.fromStore())) == nil, epoch == self.startEpoch, isConnected {
             // Some re-signed builds never get app messages through to the extension: reconnect instead
             // (auto-reconnect off first, or iOS starts the tunnel again by itself, with the old server).
-            connectWhenStopped = true
-            disconnect()
+            reconnect()
         }
     }
 

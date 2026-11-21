@@ -290,7 +290,7 @@ iOS и ядра.
 `bash build-tvos.sh CODE_SIGNING_ALLOWED=NO`. Для установки на Apple TV соберите с
 `bash build-tvos.sh -allowProvisioningUpdates DEVELOPMENT_TEAM=<TeamID>` и установите
 `build/dd-tvos/Build/Products/Debug-appletvos/FurkVPN.app` на зарегистрированное устройство.
-На Apple TV нажмите «Добавить ключ», затем отсканируйте QR-код в настройках FurkVPN на телефоне.
+На Apple TV нажмите «Подключить через телефон», затем отсканируйте QR-код в настройках FurkVPN на телефоне.
 
 Нужны macOS с Xcode, Go (версия из `core/go.mod`), gomobile и XcodeGen:
 

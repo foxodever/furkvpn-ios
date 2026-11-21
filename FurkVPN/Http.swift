@@ -3,15 +3,31 @@ import Security
 import UIKit
 
 enum SubscriptionError: LocalizedError {
-    case foreign, notFound, badFormat, noServers
+    case foreign, notFound, badFormat, noServers, saveFailed
     case network(Error)
 
     var errorDescription: String? {
         switch self {
         case .foreign: return "Это не ключ FurkVPN. В приложение можно добавить только ключ FurkVPN."
-        case .notFound: return "Ключ не найден. Получите новый в боте."
-        case .badFormat: return "Не удалось прочитать подписку. Напишите в поддержку."
+        case .notFound:
+            #if os(tvOS)
+            return "Ключ не найден. Проверьте подписку в приложении FurkVPN на телефоне и подключите телевизор снова."
+            #else
+            return "Ключ не найден. Получите новый в боте."
+            #endif
+        case .badFormat:
+            #if os(tvOS)
+            return "Не удалось прочитать подписку. Проверьте её в приложении FurkVPN на телефоне и попробуйте снова."
+            #else
+            return "Не удалось прочитать подписку. Напишите в поддержку."
+            #endif
         case .noServers: return "В подписке нет серверов."
+        case .saveFailed:
+            #if os(tvOS)
+            return "Apple TV не удалось сохранить серверы. Попробуйте снова."
+            #else
+            return "Не удалось сохранить серверы. Попробуйте снова."
+            #endif
         case .network: return "Не удалось загрузить подписку. Проверьте интернет и попробуйте ещё раз."
         }
     }

@@ -121,8 +121,11 @@ struct SettingsView: View {
             .barItem(.confirmationAction) { Button("Готово") { dismiss() } }
             .confirmationDialog("Удалить ключ?", isPresented: $confirmLogout, titleVisibility: .visible) {
                 Button("Удалить ключ", role: .destructive) {
-                    model.logout()
-                    dismiss()
+                    Task {
+                        if await model.logoutNow() {
+                            dismiss()
+                        }
+                    }
                 }
                 Button("Отмена", role: .cancel) {}
             } message: {
