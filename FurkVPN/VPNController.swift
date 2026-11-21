@@ -182,7 +182,14 @@ final class VPNController: ObservableObject {
     /** Off and on again (the next start saves the profile with the current settings). */
     private func reconnect() {
         connectWhenStopped = true
-        disconnect()
+        stop()
+    }
+
+    /** The status as iOS has it now: a change may have passed while the app was not running (a Mac asleep). */
+    func resync() {
+        // Not in the middle of a connect: iOS has not heard of it yet, and the screen would fall back to "off".
+        guard !starting, Date().timeIntervalSince(startedAt) > 15 else { return }
+        if let connection = manager?.connection { update(connection) }
     }
 
     private func update(_ connection: NEVPNConnection) {
@@ -301,7 +308,16 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /**
+     * The user's own stop: nothing brings the VPN back after it. A reconnect waiting for the tunnel to go down
+     * (a reload the extension didn't answer) used to start it again right after "Отключиться".
+     */
     func disconnect() {
+        connectWhenStopped = false
+        stop()
+    }
+
+    private func stop() {
         // With nothing running there is no stop to come, and the flag would hide the next connection's error.
         userStopped = state != .idle
         guard let manager else { return }
@@ -314,6 +330,9 @@ final class VPNController: ObservableObject {
                 try? await manager.saveToPreferences()
             }
             manager.connection.stopVPNTunnel()
+            // The tunnel may be down already and the app not told (a Mac that slept through it): the screen
+            // said "connected" with nothing left to stop. What iOS says now is what the screen shows.
+            update(manager.connection)
         }
     }
 
@@ -397,8 +416,7 @@ final class VPNController: ObservableObject {
         if await send(.reload(TunnelPayload.fromStore())) == nil, isConnected {
             // Some re-signed builds never get app messages through to the extension: reconnect instead
             // (auto-reconnect off first, or iOS starts the tunnel again by itself, with the old server).
-            connectWhenStopped = true
-            disconnect()
+            reconnect()
         }
     }
 

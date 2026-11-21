@@ -75,14 +75,27 @@ func TestWhitelistCheck(t *testing.T) {
 	if a := runCheck(t, config, map[string]string{"google.test": "127.0.0.1", "vk.test": "127.0.0.1"}, true); a.Status != whitelistAllOK {
 		t.Errorf("status %s", a.Status)
 	}
-	// Pinned only: a host without an address is not looked up.
+	// Pinned only: a host without an address is not looked up — and not asked is no sign of white lists
+	// (the lookup of Google's names failing before the tunnel used to move the server on every check).
 	a = runCheck(t, config, map[string]string{"vk.test": "127.0.0.1"}, true)
-	if a.Status != whitelistOn || a.Blocked[0].Error != "DNS" {
+	if a.Status != whitelistUnknown || a.Blocked[0].Error != "DNS" {
 		t.Errorf("%+v", a)
+	}
+	// The other way round: Google answers, VK was not asked.
+	if a := runCheck(t, config, map[string]string{"google.test": "127.0.0.1"}, true); a.Status != whitelistAllOK {
+		t.Errorf("status %s", a.Status)
+	}
+	// Without pinnedOnly the name is looked up: a lookup that fails is an answer (no such site here).
+	if a := runCheck(t, config, map[string]string{"vk.test": "127.0.0.1"}, false); a.Status != whitelistOn {
+		t.Errorf("status %s: %+v", a.Status, a)
 	}
 	// Nothing answers.
 	config = `{"blockedProbes":["http://google.test:` + closedPort + `"],"allowedProbes":["http://vk.test:` + closedPort + `"]}`
 	if a := runCheck(t, config, map[string]string{"google.test": "127.0.0.1", "vk.test": "127.0.0.1"}, true); a.Status != whitelistNoInternet {
+		t.Errorf("status %s", a.Status)
+	}
+	// Google doesn't answer and VK was not asked: can't tell, not "nothing works".
+	if a := runCheck(t, config, map[string]string{"google.test": "127.0.0.1"}, true); a.Status != whitelistUnknown {
 		t.Errorf("status %s", a.Status)
 	}
 }
@@ -95,28 +108,37 @@ func TestWhitelistTarget(t *testing.T) {
 		{"key":"bypass","remarks":"🇷🇺 Все операторы","kind":"SERVER"}
 	]`
 	cases := []struct {
-		old, now, current, auto, want string
+		old, now, current, auto, previous, want string
 	}{
-		{"ALL_OK", "WHITELIST", "nl", "", "lte"},
-		{"UNKNOWN", "WHITELIST", "wifi", "", "lte"},
-		{"ALL_OK", "WHITELIST", "bypass", "", ""},
-		{"ALL_OK", "WHITELIST", "lte", "", ""},
-		{"WHITELIST", "WHITELIST", "nl", "", ""},
+		{"ALL_OK", "WHITELIST", "nl", "", "", "lte"},
+		{"UNKNOWN", "WHITELIST", "wifi", "", "", "lte"},
+		{"ALL_OK", "WHITELIST", "bypass", "", "", ""},
+		{"ALL_OK", "WHITELIST", "lte", "", "", ""},
+		{"WHITELIST", "WHITELIST", "nl", "", "", ""},
 		// Back: only from the server the app chose, or from a bypass server.
-		{"WHITELIST", "ALL_OK", "lte", "lte", "wifi"},
-		{"WHITELIST", "ALL_OK", "lte", "", ""},
-		{"WHITELIST", "ALL_OK", "bypass", "", "wifi"},
-		{"UNKNOWN", "ALL_OK", "bypass", "", ""},
-		{"WHITELIST", "ALL_OK", "wifi", "wifi", ""},
-		{"ALL_OK", "NO_INTERNET", "nl", "", ""},
-		{"ALL_OK", "WHITELIST", "gone", "", ""},
+		{"WHITELIST", "ALL_OK", "lte", "lte", "", "wifi"},
+		{"WHITELIST", "ALL_OK", "lte", "", "", ""},
+		{"WHITELIST", "ALL_OK", "bypass", "", "", "wifi"},
+		{"UNKNOWN", "ALL_OK", "bypass", "", "", ""},
+		{"WHITELIST", "ALL_OK", "wifi", "wifi", "", ""},
+		{"ALL_OK", "NO_INTERNET", "nl", "", "", ""},
+		{"ALL_OK", "WHITELIST", "gone", "", "", ""},
+		// Back to the server chosen before the app moved it, not to auto-select.
+		{"WHITELIST", "ALL_OK", "lte", "lte", "nl", "nl"},
+		{"NO_INTERNET", "ALL_OK", "lte", "lte", "nl", "nl"},
+		{"WHITELIST", "ALL_OK", "bypass", "", "nl", "nl"},
+		// The subscription no longer has it: the Wi-Fi server, as before.
+		{"WHITELIST", "ALL_OK", "lte", "lte", "gone", "wifi"},
+		// A hand-picked server stays whatever was remembered.
+		{"WHITELIST", "ALL_OK", "nl", "lte", "wifi", ""},
+		{"WHITELIST", "ALL_OK", "lte", "lte", "lte", "wifi"},
 	}
 	for _, c := range cases {
-		if got := WhitelistTarget(c.old, c.now, c.current, servers, "", c.auto); got != c.want {
+		if got := WhitelistTarget(c.old, c.now, c.current, servers, "", c.auto, c.previous); got != c.want {
 			t.Errorf("%+v: got %q", c, got)
 		}
 	}
-	if got := WhitelistTarget("ALL_OK", "WHITELIST", "nl", `[{"key":"nl","remarks":"NL","kind":"SERVER"}]`, "", ""); got != "" {
+	if got := WhitelistTarget("ALL_OK", "WHITELIST", "nl", `[{"key":"nl","remarks":"NL","kind":"SERVER"}]`, "", "", ""); got != "" {
 		t.Errorf("no LTE server: %q", got)
 	}
 	if got := WhitelistPingServers(servers, ""); got != `["lte","bypass"]` {

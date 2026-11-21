@@ -95,6 +95,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var gaveUp = false
     private var lastHealthRestart = Date.distantPast
     private var sleptAt: Date?
+    /** The last turn of the network timer: a gap between two is time this process was not running. On [queue]. */
+    private var lastTick = Date()
+    /** The last time a wake-up was handled (iOS's word and the clock's both tell of the same one). On [queue]. */
+    private var lastWoke = Date.distantPast
+    /** White list checks that said "nothing works" in a row: asked again sooner, a few times. On [whitelistQueue]. */
+    private var noInternetChecks = 0
     /** The server auto-select found best a moment ago, to start the next core with it as the fallback. */
     private var autoBest: (serverKey: String, tag: String, at: Date)?
     /**
@@ -123,6 +129,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let autoCheckInterval = 10
     private static let healthRestartMin: TimeInterval = 120
     private static let longSleep: TimeInterval = 5 * 60
+    /** Asleep this long, the connections to the servers are dead for sure: the core starts afresh. */
+    private static let deadSleep: TimeInterval = 30 * 60
     private static let autoBestMaxAge: TimeInterval = 10 * 60
     private static let whitelistInterval = 5 * 60
 
@@ -281,15 +289,33 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    // After a long sleep the connections to the servers may be dead (the operator dropped them):
-    // check auto-select's servers now instead of waiting for its next round.
     override func wake() {
         resumeWatchdog()
         guard let slept = sleptAt else { return }
         sleptAt = nil
-        if Date().timeIntervalSince(slept) >= Self.longSleep {
-            checkAutoSelect(afterSleep: true)
-            scheduleWhitelistCheck(after: 3)
+        woke(after: Date().timeIntervalSince(slept))
+    }
+
+    /**
+     * Awake after [seconds] asleep — iOS said so (wake), or the network timer saw the clock jump: a Mac with
+     * its lid closed doesn't always say. After a long sleep the connections to the servers may be dead (the
+     * operator or the router dropped them): auto-select's servers are checked now instead of at its next round.
+     * After a very long one they are dead for sure, the pooled ones too (XHTTP, gRPC), and new requests would
+     * hang on them for minutes — the VPN "didn't work" after a Mac had slept for hours: the core starts afresh.
+     */
+    private func woke(after seconds: TimeInterval) {
+        guard seconds >= Self.longSleep else { return }
+        queue.async {
+            guard Date().timeIntervalSince(self.lastWoke) > 60 else { return }
+            self.lastWoke = Date()
+            LibxrayDebugNote("awake after \(Int(seconds / 60)) min asleep")
+            if seconds >= Self.deadSleep, self.running, !self.reloading, !self.stopping {
+                self.lastHealthRestart = Date()
+                self.restartCore("awake after a long sleep")
+            } else {
+                self.checkAutoSelect(afterSleep: true)
+            }
+            self.scheduleWhitelistCheck(after: 3)
         }
     }
 
@@ -543,7 +569,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         watchdogTimer = watchdog
         let network = DispatchSource.makeTimerSource(queue: queue)
         network.schedule(deadline: .now() + .seconds(Self.networkPoll), repeating: .seconds(Self.networkPoll))
-        network.setEventHandler { [weak self] in self?.checkNetwork() }
+        lastTick = Date()
+        network.setEventHandler { [weak self] in
+            guard let self else { return }
+            // The timer doesn't run while the device sleeps: a gap in its turns is a sleep.
+            let gap = Date().timeIntervalSince(self.lastTick)
+            self.lastTick = Date()
+            if gap >= Self.longSleep { self.woke(after: gap) }
+            self.checkNetwork()
+        }
         network.resume()
         networkTimer = network
         let whitelist = DispatchSource.makeTimerSource(queue: whitelistQueue)
@@ -875,7 +909,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
      * Asks the check's sites directly — at the addresses resolved before the tunnel and left out of its routes,
      * the only ones iOS lets this process reach past its tunnel — and moves to the server for white lists when
      * the operator turned them on (back when they are off). Nil when detection is off or the sites' addresses
-     * are unknown. Runs on [whitelistQueue]; blocks for up to ~6 s.
+     * are unknown, or when the check learned nothing. Runs on [whitelistQueue]; blocks for up to ~6 s, ~16 s
+     * when white lists are found (the check is made twice then).
      */
     @discardableResult
     private func checkWhitelistNow() -> WhitelistCheck? {
@@ -884,9 +919,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             queue.sync { (running, subscription.addresses, coreInterface, lastPath) }
         let config = Store.loadRemoteConfig()?.whitelist ?? WhitelistConfig()
         guard state.running, Whitelist.hosts(config).contains(where: { state.addresses[$0] != nil }) else { return nil }
-        var check = Whitelist.check(config, addresses: state.addresses, pinnedOnly: true, interface: state.interface,
-                                    network: state.path.map(Whitelist.networkKind) ?? "other")
+        let ask = {
+            Whitelist.check(config, addresses: state.addresses, pinnedOnly: true, interface: state.interface,
+                            network: state.path.map(Whitelist.networkKind) ?? "other")
+        }
+        // White lists just found are asked about once more before the server is moved.
+        var check = Whitelist.confirmed(ask(), again: ask)
         LibxrayDebugNote("white lists: \(check.status.rawValue)")
+        // The sites it needed have no addresses (their lookup failed before the tunnel): nothing learned.
+        guard check.status != .unknown else { return nil }
+        // "Nothing works" right after a wake-up or on a network just joined is often only too early: asked
+        // again soon, a few times, instead of staying on the app's card until the next check in five minutes.
+        if check.status == .noInternet {
+            noInternetChecks += 1
+            if noInternetChecks <= 3 { scheduleWhitelistCheck(after: 15) }
+        } else {
+            noInternetChecks = 0
+        }
         guard let target = Whitelist.apply(&check) else {
             SharedChange.post()
             return check

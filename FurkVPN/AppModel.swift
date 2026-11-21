@@ -287,6 +287,8 @@ final class AppModel: ObservableObject {
         lastResume = Date()
         let coldStart = !resumedBefore
         resumedBefore = true
+        // The VPN may have gone down while the app was not running (a Mac asleep), without a word to it.
+        vpn.resync()
         syncShared()
         if Date().timeIntervalSince(whitelistCheck?.time ?? .distantPast) > 60 { checkWhitelist() }
         Task {
@@ -404,6 +406,7 @@ final class AppModel: ObservableObject {
                     // and "on already" never moves one.
                     Store.whitelistCheck = nil
                     Store.whitelistAutoSwitched = nil
+                    Store.whitelistPrevious = nil
                     self.whitelistCheck = nil
                     self.show("Ключ добавлен")
                     if wasActive { await self.vpn.reload() }
@@ -530,7 +533,10 @@ final class AppModel: ObservableObject {
                 }
                 let config = self.config.whitelist
                 let network = PhysicalNetwork.shared.kind
-                var check = await Task.detached(priority: .userInitiated) { Whitelist.check(config, network: network) }.value
+                // White lists just found are asked about once more before the server is moved.
+                var check = await Task.detached(priority: .userInitiated) {
+                    Whitelist.confirmed(Whitelist.check(config, network: network)) { Whitelist.check(config, network: network) }
+                }.value
                 // The VPN came up meanwhile: the extension checks from now on.
                 guard vpn.state == .idle else { return }
                 if let target = Whitelist.apply(&check) {
@@ -540,9 +546,23 @@ final class AppModel: ObservableObject {
                         : "Белые списки выключены — вернули \(target.displayName)")
                 }
                 whitelistCheck = check
+                // "Nothing works" a moment after a new network or a wake-up is often just too early: asked again
+                // soon, not left on the card until the app is opened next.
+                if check.status == .noInternet, whitelistRetries < 2 {
+                    whitelistRetries += 1
+                    Task {
+                        try? await Task.sleep(nanoseconds: 10_000_000_000)
+                        checkWhitelist()
+                    }
+                } else if check.status != .noInternet {
+                    whitelistRetries = 0
+                }
             }
         }
     }
+
+    /** Checks made again in a row after "nothing works". */
+    private var whitelistRetries = 0
 
     private var networkTask: Task<Void, Never>?
 
@@ -594,9 +614,10 @@ final class AppModel: ObservableObject {
 
     // MARK: Servers
 
+    /** A server picked by hand: white lists going off leave it where it is (Store.selectByHand). */
     func select(_ key: String?, reconnect: Bool = true) {
         selectedKey = key
-        Store.selectedServer = key
+        Store.selectByHand(key)
         if reconnect, vpn.isActive { Task { await vpn.reload() } }
     }
 

@@ -22,18 +22,18 @@ private extension WhitelistStatus {
     }
 }
 
-/** Hidden when the detection is off in Settings. */
+/** Hidden when the detection is off in Settings. The details are a sheet of the main screen ([onDetails]), next to its other sheets. */
 struct WhitelistCard: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vpn: VPNController
-    @State private var details = false
+    var onDetails: () -> Void
 
     /** Another app's VPN, while ours is off (connecting ours turns it off). */
     private var otherVPN: Bool { model.otherVPN && vpn.state == .idle }
 
     var body: some View {
         if model.whitelistDetect {
-            Button { details = true } label: {
+            Button(action: onDetails) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Белые списки").font(.headline)
@@ -55,9 +55,6 @@ struct WhitelistCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .sheet(isPresented: $details) {
-                WhitelistSheet().environmentObject(model).environmentObject(vpn)
-            }
         }
     }
 
@@ -81,7 +78,7 @@ private struct StatusDot: View {
 }
 
 /** When the sites were checked, how each one answered, and that it was done without the VPN. */
-private struct WhitelistSheet: View {
+struct WhitelistSheet: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vpn: VPNController
     @Environment(\.dismiss) private var dismiss

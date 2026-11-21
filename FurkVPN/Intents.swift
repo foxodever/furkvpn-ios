@@ -162,7 +162,7 @@ struct ConnectToServerIntent: AppIntent {
         guard Store.loadSubscription()?.selectable.contains(where: { $0.key == server.id }) == true else {
             throw IntentFailure(localizedStringResource: "Такого сервера больше нет в подписке")
         }
-        Store.selectedServer = server.id
+        Store.selectByHand(server.id)
         if TunnelSwitch.isOn(manager) {
             // Still connecting, or moving to another network: the tunnel takes messages only once connected
             // (and its start may have read the server chosen before).
