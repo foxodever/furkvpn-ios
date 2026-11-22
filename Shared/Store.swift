@@ -21,8 +21,18 @@ enum Store {
     }()
 
     static let container: URL = {
+        #if os(tvOS)
+        let url: URL
+        if let groupId, let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupId) {
+            url = shared.appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Caches", isDirectory: true)
+        } else {
+            url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        }
+        #else
         if let groupId, let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupId) { return url }
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #endif
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -31,8 +41,13 @@ enum Store {
 
     private static let subscriptionFile = container.appendingPathComponent("subscription.json")
     private static let configsFile = container.appendingPathComponent("subscription_configs.json")
+    private static let configsPrefix = "subscription_configs_"
     private static let remoteConfigFile = container.appendingPathComponent("remote_config.json")
     private static let accountFile = container.appendingPathComponent("account.json")
+
+    private static func configsFile(for fetchedAtMs: Int64) -> URL {
+        container.appendingPathComponent("\(configsPrefix)\(fetchedAtMs).json")
+    }
 
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -50,9 +65,14 @@ enum Store {
         return try? decoder.decode(type, from: data)
     }
 
-    private static func write<T: Encodable>(_ value: T, _ url: URL) {
-        guard let data = try? encoder.encode(value) else { return }
-        try? data.write(to: url, options: .atomic)
+    @discardableResult
+    private static func write<T: Encodable>(_ value: T, _ url: URL) -> Bool {
+        do {
+            try encoder.encode(value).write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: Subscription
@@ -65,21 +85,74 @@ enum Store {
         var configs: [String]
     }
 
-    /** [configs][i] is the raw Xray config of [info.servers][i]. */
-    static func saveSubscription(_ info: SubscriptionInfo, configs: [String]) {
-        write(SavedConfigs(fetchedAt: info.fetchedAtMs, configs: configs), configsFile)
-        write(info, subscriptionFile)
+    /**
+     * [configs][i] is the raw Xray config of [info.servers][i].
+     * Published per generation so a failed metadata write never leaves the previous subscription broken.
+     */
+    @discardableResult
+    static func saveSubscription(_ info: SubscriptionInfo, configs: [String]) -> Bool {
+        let target = configsFile(for: info.fetchedAtMs)
+        let previousTargetData = try? Data(contentsOf: target)
+        guard write(SavedConfigs(fetchedAt: info.fetchedAtMs, configs: configs), target) else { return false }
+        guard write(info, subscriptionFile) else {
+            if let previousTargetData {
+                try? previousTargetData.write(to: target, options: .atomic)
+            } else {
+                try? FileManager.default.removeItem(at: target)
+            }
+            return false
+        }
+        cleanupConfigs(keeping: target.lastPathComponent)
+        return true
     }
 
-    static func clearSubscription() {
-        try? FileManager.default.removeItem(at: subscriptionFile)
-        try? FileManager.default.removeItem(at: configsFile)
-        try? FileManager.default.removeItem(at: accountFile)
+    @discardableResult
+    static func clearSubscription() -> Bool {
+        guard remove(subscriptionFile) else { return false }
+        let removedLegacy = remove(configsFile)
+        let removedGen = cleanupConfigs(keeping: nil)
+        let removedAccount = remove(accountFile)
         selectedServer = nil
         // The next key's servers are moved for white lists from scratch.
         whitelistCheck = nil
         whitelistAutoSwitched = nil
         whitelistPrevious = nil
+        return removedLegacy && removedGen && removedAccount
+    }
+
+    /** Best-effort cleanup of leftover configs/account if a prior partial logout removed only subscription.json. */
+    static func cleanupOrphanedSubscriptionFiles() {
+        guard !FileManager.default.fileExists(atPath: subscriptionFile.path) else { return }
+        _ = remove(configsFile)
+        _ = cleanupConfigs(keeping: nil)
+        _ = remove(accountFile)
+    }
+
+    private static func remove(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return true }
+        do {
+            try fm.removeItem(at: url)
+            return true
+        } catch {
+            return !fm.fileExists(atPath: url.path)
+        }
+    }
+
+    @discardableResult
+    private static func cleanupConfigs(keeping currentName: String?) -> Bool {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: nil) else {
+            return currentName != nil
+        }
+        var ok = true
+        for file in files {
+            let name = file.lastPathComponent
+            if name == currentName { continue }
+            if name == configsFile.lastPathComponent || (name.hasPrefix(configsPrefix) && name.hasSuffix(".json")) {
+                if !remove(file) { ok = false }
+            }
+        }
+        return ok
     }
 
     /**
@@ -90,17 +163,26 @@ enum Store {
     static func config(for serverKey: String) -> String? {
         for _ in 0..<2 {
             guard let info = loadSubscription(), let index = info.servers.firstIndex(where: { $0.key == serverKey }) else { return nil }
-            // Before 1.1.0: a bare array.
+            if let saved = read(SavedConfigs.self, configsFile(for: info.fetchedAtMs)), saved.fetchedAt == info.fetchedAtMs {
+                return index < saved.configs.count ? saved.configs[index] : nil
+            }
+            // Legacy single-file formats (upgrading from an earlier build).
             if let configs = read([String].self, configsFile) { return index < configs.count ? configs[index] : nil }
-            guard let saved = read(SavedConfigs.self, configsFile) else { return nil }
-            if saved.fetchedAt == info.fetchedAtMs { return index < saved.configs.count ? saved.configs[index] : nil }
+            if let saved = read(SavedConfigs.self, configsFile), saved.fetchedAt == info.fetchedAtMs {
+                return index < saved.configs.count ? saved.configs[index] : nil
+            }
         }
         return nil
     }
 
     /** The raw configs of all the servers of the subscription. */
     static func allConfigs() -> [String] {
-        // Before 1.1.0: a bare array.
+        if let info = loadSubscription(),
+           let saved = read(SavedConfigs.self, configsFile(for: info.fetchedAtMs)),
+           saved.fetchedAt == info.fetchedAtMs {
+            return saved.configs
+        }
+        // Before 1.1.0: a bare array, or legacy single-file SavedConfigs.
         if let configs = read([String].self, configsFile) { return configs }
         return read(SavedConfigs.self, configsFile)?.configs ?? []
     }

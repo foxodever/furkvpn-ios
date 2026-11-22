@@ -1,54 +1,96 @@
 import SwiftUI
 import UIKit
 
-extension Color {
-    static let brandBackground = Color("Background")
-    static let card = Color("Card")
-    static let cardHigh = Color("CardHigh")
-    static let onAccent = Color("OnAccent")
-    static let errorCard = Color("ErrorCard")
-    static let onErrorCard = Color("OnErrorCard")
-    static let good = Color("Good")
-}
-
 /**
- * Rounded block of the main screen, like the Android cards: glass tinted with the card's color on iOS 26 (the
- * same color wherever the card is on the screen), a solid card before. The plan that ran out is red.
+ * Rounded block of the main screen, like the Android cards: glass tinted with the card's color on iOS/tvOS 26
+ * (the same color wherever the card is on the screen), a solid card before. The plan that ran out is red.
  */
 struct CardBackground: ViewModifier {
     var color: Color = .card
+    #if os(tvOS)
+    private static let horizontalPadding: CGFloat = 20
+    private static let verticalPadding: CGFloat = 14
+    private static let radius: CGFloat = 26
+    #else
+    private static let horizontalPadding: CGFloat = 16
+    private static let verticalPadding: CGFloat = 16
+    private static let radius: CGFloat = 24
+    #endif
+
+    #if os(tvOS)
+    /** A row of cards on the Apple TV home tab: every card takes the row's full height. */
+    @Environment(\.tvCardFillsHeight) private var fillsHeight
+    #endif
 
     func body(content: Content) -> some View {
         content
-            .padding(16)
+            .padding(.horizontal, Self.horizontalPadding)
+            .padding(.vertical, Self.verticalPadding)
+            #if os(tvOS)
+            .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: fillsHeight ? .topLeading : .leading)
+            #else
             .frame(maxWidth: .infinity, alignment: .leading)
-            .cardSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), color: color)
+            #endif
+            .cardSurface(RoundedRectangle(cornerRadius: Self.radius, style: .continuous), color: color)
     }
 }
 
 extension View {
     func card(_ color: Color = .card) -> some View { modifier(CardBackground(color: color)) }
-
-    /**
-     * All the lines the text needs. Without it a text can come out cut to one line with "…" when a stack
-     * is given a fixed height to share (the halves of the wide layout are as tall as the screen).
-     */
-    func wraps() -> some View { fixedSize(horizontal: false, vertical: true) }
 }
+
+#if os(tvOS)
+private struct TVCardFillsHeightKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /** Cards stretch to the tallest card of their row (the Apple TV home tab's card row). */
+    var tvCardFillsHeight: Bool {
+        get { self[TVCardFillsHeightKey.self] }
+        set { self[TVCardFillsHeightKey.self] = newValue }
+    }
+}
+#endif
+
+#if os(tvOS)
+/** Trailing affordance of the main screen's focusable cards (white lists, announcement): static cards have none. */
+struct TVCardChevron: View {
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption.weight(.bold))
+            .foregroundColor(.secondary)
+            .accessibilityHidden(true)
+    }
+}
+#endif
 
 /**
  * Two halves side by side when the window is wide enough for both: the unfolded iPhone Duo (its inner
- * display is wider than tall and doesn't keep the app in portrait), an iPad, a Mac window. Chosen by the
- * space the window has, not by the device: the Duo's halves, Split View, Slide Over and a narrow Mac
- * window give the narrow layout.
+ * display is wider than tall and doesn't keep the app in portrait), an iPad, a Mac window, Apple TV.
+ * Chosen by the space the window has, not by the device: the Duo's halves, Split View, Slide Over and
+ * a narrow Mac window give the narrow layout.
  */
 enum WideLayout {
     static let minWidth: CGFloat = 700
+    #if os(tvOS)
+    static let maxWidth: CGFloat = 1760
+    static let gap: CGFloat = 56
+    static let homeColumnMaxWidth: CGFloat = 780
+    #else
     static let maxWidth: CGFloat = 1200
     /** Between the halves; the halves are equal, so on the Duo the gap lies over the fold. */
     static let gap: CGFloat = 40
+    static let homeColumnMaxWidth: CGFloat = 560
+    #endif
 
-    static func fits(_ size: CGSize) -> Bool { size.width >= minWidth }
+    static func fits(_ size: CGSize) -> Bool {
+        #if os(tvOS)
+        return true
+        #else
+        return size.width >= minWidth
+        #endif
+    }
 
     /**
      * Extra room on the side with the smaller safe area inset, so the halves are centred on the window (the
@@ -67,23 +109,36 @@ struct ToastOverlay: ViewModifier {
     func body(content: Content) -> some View {
         content.overlay(alignment: .bottom) {
             if let text {
-                Text(text)
+                let label = Text(text)
                     .font(.subheadline)
                     .foregroundColor(toastText)
                     .multilineTextAlignment(.center)
+                    #if os(tvOS)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 16)
+                    #else
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
+                    #endif
                     .glassSurface(Capsule(), fallback: .accentColor)
+                    #if os(tvOS)
+                    .padding(.horizontal, 120)
+                    .padding(.bottom, 48)
+                    #else
                     .padding(.horizontal, 24)
                     .padding(.bottom, 24)
+                    #endif
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .onTapGesture { self.text = nil }
+                #if os(tvOS)
+                label.allowsHitTesting(false)
+                #else
+                label.onTapGesture { self.text = nil }
+                #endif
             }
         }
         .animation(.easeInOut(duration: 0.25), value: text)
     }
 
-    /** Dark text on the glass of iOS 26, light text on the accent capsule before. */
     /** On glass (liquid or matte) the message is in the text color; on the flat accent capsule, in its contrast color. */
     private var toastText: Color {
         GlassStyle.current == .flat ? .onAccent : .primary
@@ -94,56 +149,10 @@ extension View {
     func toast(_ text: Binding<String?>) -> some View { modifier(ToastOverlay(text: text)) }
 }
 
+#if !os(tvOS)
 func openLink(_ string: String?) {
     guard let string, let url = URL(string: string.trimmingCharacters(in: .whitespaces)) else { return }
     UIApplication.shared.open(url)
-}
-
-enum Format {
-    static func bytes(_ value: Int64) -> String {
-        let f = ByteCountFormatter()
-        f.countStyle = .file
-        return f.string(fromByteCount: max(value, 0))
-    }
-
-    static func speed(_ bytesPerSecond: Int64) -> String { bytes(bytesPerSecond) + "/с" }
-
-    static func date(_ seconds: Int64) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.dateStyle = .long
-        return f.string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
-    }
-
-    static func dateTime(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        f.doesRelativeDateFormatting = true
-        return f.string(from: date)
-    }
-
-    /** 1 день, 2 дня, 5 дней. */
-    static func days(_ n: Int) -> String { "\(n) " + plural(n, "день", "дня", "дней") }
-
-    static func hours(_ n: Int) -> String { "\(n) " + plural(n, "час", "часа", "часов") }
-
-    static func plural(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {
-        let mod10 = n % 10, mod100 = n % 100
-        if mod10 == 1 && mod100 != 11 { return one }
-        if (2...4).contains(mod10) && !(12...14).contains(mod100) { return few }
-        return many
-    }
-
-    static func ping(_ ping: Ping?, kind: ServerKind?) -> String? {
-        switch ping {
-        case let .ok(ms): return "\(ms) мс"
-        case .failed: return "—"
-        case .testing: return nil
-        case nil: return kind == .auto ? "авто" : nil
-        }
-    }
 }
 
 /**
@@ -185,6 +194,7 @@ enum Linkify {
         return result
     }
 }
+#endif
 
 struct PingLabel: View {
     var ping: Ping?
@@ -192,11 +202,20 @@ struct PingLabel: View {
 
     var body: some View {
         if ping == .testing {
+            #if os(tvOS)
+            ProgressView().scaleEffect(0.6)
+            #else
             ProgressView().controlSize(.small)
+            #endif
         } else if let text = Format.ping(ping, kind: kind) {
             Text(text)
+                #if os(tvOS)
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                #else
                 .font(.subheadline.monospacedDigit())
+                #endif
                 .foregroundColor(color)
+                .fixedSize()
         }
     }
 
@@ -213,6 +232,27 @@ struct ServerTitle: View {
     var server: ServerEntry
 
     var body: some View {
+        #if os(tvOS)
+        HStack(spacing: 14) {
+            Text(server.flag ?? "🌐")
+                .font(.system(size: 36))
+                .frame(width: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(server.title)
+                    .font(.callout.weight(.medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                if let summary = server.summary {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+            }
+        }
+        #else
         HStack(spacing: 12) {
             Text(server.flag ?? "🌐").font(.title2)
             VStack(alignment: .leading, spacing: 2) {
@@ -222,9 +262,11 @@ struct ServerTitle: View {
                 }
             }
         }
+        #endif
     }
 }
 
+#if !os(tvOS)
 struct SupportSheet: View {
     let contacts: [SupportContact]
     let subscriptionSupport: String?
@@ -309,6 +351,28 @@ struct TelegramProxiesSheet: View {
         .sheetGlass()
     }
 }
+#endif
+
+#if os(tvOS)
+/** Title row of the Apple TV form sheets (manual key, routing rules): a tinted glyph tile beside the title. */
+struct TVSheetHeader: View {
+    var icon: String
+    var title: String
+
+    var body: some View {
+        HStack(spacing: 22) {
+            Image(systemName: icon)
+                .font(.callout.weight(.semibold))
+                .foregroundColor(.onAccent)
+                .frame(width: 72, height: 72)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .wraps()
+        }
+    }
+}
+#endif
 
 /** Text field for a key typed or pasted by hand. */
 struct ManualKeySheet: View {
@@ -316,7 +380,47 @@ struct ManualKeySheet: View {
     @State private var text = ""
     @Environment(\.dismiss) private var dismiss
 
+    private var canSubmit: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
+        #if os(tvOS)
+        NavigationStack {
+            ZStack {
+                BrandBackdrop()
+                VStack(alignment: .leading, spacing: 26) {
+                    TVSheetHeader(icon: "key.fill", title: "Введите ключ FurkVPN")
+                    Text("Удобно вставить ссылку с iPhone через уведомление клавиатуры Apple TV.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .wraps()
+                    TextField("https://sub.furkvpn.com/…", text: $text)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                        .onSubmit {
+                            if canSubmit { submit() }
+                        }
+                    GlassGroup(spacing: 12) {
+                        HStack(spacing: 20) {
+                            Spacer()
+                            Button("Отмена") { dismiss() }
+                                .glassButtonStyle()
+                            Button("Добавить") { submit() }
+                                .glassButtonStyle(prominent: true)
+                                .disabled(!canSubmit)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .padding(44)
+                .cardSurface(RoundedRectangle(cornerRadius: 36, style: .continuous), color: .card)
+                .frame(maxWidth: 980)
+                .padding(60)
+            }
+        }
+        #else
         NavigationView {
             Form {
                 Section(header: Text("Ссылка подписки")) {
@@ -330,14 +434,19 @@ struct ManualKeySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .barItem(.cancellationAction) { Button("Отмена") { dismiss() } }
             .barItem(.confirmationAction) {
-                Button("Добавить") {
-                    dismiss()
-                    onAdd(text)
-                }
-                .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Добавить") { submit() }
+                    .disabled(!canSubmit)
             }
         }
         .sheetGlass()
+        #endif
+    }
+
+    private func submit() {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        dismiss()
+        onAdd(value)
     }
 }
 
@@ -346,9 +455,11 @@ struct KeyAlerts: ViewModifier {
     @EnvironmentObject private var model: AppModel
 
     func body(content: Content) -> some View {
-        content
+        let base = content
             .alert("Ключ не добавлен", isPresented: Binding(get: { model.keyError != nil }, set: { if !$0 { model.keyError = nil } })) {
+                #if !os(tvOS)
                 Button("Открыть бота") { openLink(model.config.telegramBotUrl) }
+                #endif
                 Button("Закрыть", role: .cancel) {}
             } message: {
                 Text(model.keyError ?? "")
@@ -359,19 +470,23 @@ struct KeyAlerts: ViewModifier {
             } message: {
                 Text("Текущий ключ будет заменён новым.")
             }
-            .alert("Отправить ключ на телевизор?", isPresented: Binding(get: { model.tvSend != nil }, set: { if !$0 { model.tvSend = nil } })) {
-                Button("Отправить") { model.confirmTvSend() }
-                Button("Отмена", role: .cancel) {}
-            } message: {
-                Text("Телевизор с кодом \(Self.display(model.tvSend ?? "")) подключится к вашей подписке FurkVPN.")
-            }
+        #if os(tvOS)
+        base
+        #else
+        base.alert("Отправить ключ на телевизор?", isPresented: Binding(get: { model.tvSend != nil }, set: { if !$0 { model.tvSend = nil } })) {
+            Button("Отправить") { model.confirmTvSend() }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Телевизор с кодом \(Self.display(model.tvSend ?? "")) подключится к вашей подписке FurkVPN.")
+        }
+        #endif
     }
 }
 
 extension KeyAlerts {
     /** "ABC123" → "ABC 123": easier to compare with the TV screen. */
     static func display(_ code: String) -> String {
-        code.count == 6 ? String(code.prefix(3)) + " " + String(code.suffix(3)) : code
+        Format.tvCode(code)
     }
 }
 

@@ -34,103 +34,199 @@ enum ConsentText {
 struct ConsentCard: View {
     @EnvironmentObject private var model: AppModel
     @State private var details = false
+    #if os(tvOS)
+    @FocusState private var acceptFocused: Bool
+    #endif
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: spacing) {
+            HStack(spacing: 16) {
                 Image(systemName: "hand.raised.fill")
-                    .font(.title2)
+                    .font(titleIconFont)
                     .foregroundColor(.accentColor)
                 Text(ConsentText.title)
                     .font(.title3.weight(.semibold))
                     .wraps()
             }
             Text(ConsentText.summary)
-                .font(.subheadline)
+                .font(summaryFont)
                 .foregroundColor(.secondary)
                 .wraps()
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { details.toggle() }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Text(details ? "Скрыть" : "Подробнее")
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                         .rotationEffect(.degrees(details ? 180 : 0))
                 }
+                #if !os(tvOS)
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(.accentColor)
+                #endif
             }
+            #if os(tvOS)
+            .glassButtonStyle()
+            #else
             .buttonStyle(.plain)
+            #endif
             if details {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: detailSpacing) {
                         ForEach(ConsentText.details, id: \.self) { item in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title).font(.footnote.weight(.semibold))
-                                Text(item.text).font(.footnote).foregroundColor(.secondary).wraps()
-                            }
+                            detailRow(item)
                         }
+                        #if !os(tvOS)
                         Button("Политика конфиденциальности") { openLink(model.config.site.privacyUrl) }
                             .font(.footnote.weight(.medium))
+                        #endif
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 260)
+                .frame(maxHeight: detailsMaxHeight)
                 .transition(.opacity)
             }
-            HStack(spacing: 10) {
+            HStack(spacing: actionSpacing) {
                 Button { model.declineConsent() } label: {
                     Text("Отказаться").frame(maxWidth: .infinity)
                 }
                 .glassButtonStyle()
-                Button { model.acceptConsent() } label: {
+                let accept = Button { model.acceptConsent() } label: {
                     Text("Согласиться").frame(maxWidth: .infinity)
                 }
                 .glassButtonStyle(prominent: true)
+                #if os(tvOS)
+                accept.focused($acceptFocused)
+                #else
+                accept
+                #endif
             }
-            .controlSize(.large)
+            .largeControlSize()
             .padding(.top, 4)
         }
-        .padding(20)
-        .frame(maxWidth: 440)
-        .cardSurface(RoundedRectangle(cornerRadius: 28, style: .continuous), color: .card)
-        .padding(20)
+        .padding(cardPadding)
+        .frame(maxWidth: cardMaxWidth)
+        .cardSurface(RoundedRectangle(cornerRadius: cardRadius, style: .continuous), color: .card)
+        .padding(outerPadding)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
+        #if os(tvOS)
+        .defaultFocus($acceptFocused, true)
+        .onAppear { acceptFocused = true }
+        #endif
     }
+
+    @ViewBuilder
+    private func detailRow(_ item: ConsentText.Item) -> some View {
+        let content = VStack(alignment: .leading, spacing: 4) {
+            Text(item.title)
+                .font(detailTitleFont)
+                .foregroundColor(.primary)
+            Text(item.text)
+                .font(detailBodyFont)
+                .foregroundColor(.secondary)
+                .wraps()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        #if os(tvOS)
+        Button {} label: {
+            content.padding(14)
+        }
+        .glassInteractiveButton(RoundedRectangle(cornerRadius: 18, style: .continuous), scale: 1.01)
+        #else
+        content
+        #endif
+    }
+
+    #if os(tvOS)
+    private var spacing: CGFloat { 20 }
+    private var detailSpacing: CGFloat { 14 }
+    private var actionSpacing: CGFloat { 20 }
+    private var cardPadding: CGFloat { 42 }
+    private var outerPadding: CGFloat { 48 }
+    private var cardMaxWidth: CGFloat { 1120 }
+    private var cardRadius: CGFloat { 36 }
+    private var detailsMaxHeight: CGFloat { 320 }
+    private var titleIconFont: Font { .title2 }
+    private var summaryFont: Font { .callout }
+    private var detailTitleFont: Font { .callout.weight(.semibold) }
+    private var detailBodyFont: Font { .caption }
+    #else
+    private var spacing: CGFloat { 14 }
+    private var detailSpacing: CGFloat { 12 }
+    private var actionSpacing: CGFloat { 10 }
+    private var cardPadding: CGFloat { 20 }
+    private var outerPadding: CGFloat { 20 }
+    private var cardMaxWidth: CGFloat { 440 }
+    private var cardRadius: CGFloat { 28 }
+    private var detailsMaxHeight: CGFloat { 260 }
+    private var titleIconFont: Font { .title2 }
+    private var summaryFont: Font { .subheadline }
+    private var detailTitleFont: Font { .footnote.weight(.semibold) }
+    private var detailBodyFont: Font { .footnote }
+    #endif
 }
 
 /** Instead of the app while the consent is declined: nothing is sent and the VPN doesn't connect. */
 struct ConsentDeclinedView: View {
     @EnvironmentObject private var model: AppModel
+    #if os(tvOS)
+    @FocusState private var reviewFocused: Bool
+    #endif
 
     var body: some View {
         ZStack {
             BrandBackdrop()
-            VStack(spacing: 16) {
+            VStack(spacing: stackSpacing) {
                 Image("Logo")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 96)
+                    .frame(width: logoWidth)
                     .foregroundColor(.primary)
                 Text("Без согласия VPN не работает")
-                    .font(.title3.weight(.semibold))
+                    .font(headingFont)
                     .multilineTextAlignment(.center)
                     .padding(.top, 16)
                 Text("Эти данные нужны, чтобы загрузить серверы по ключу и подключиться к ним. Пока согласия нет, FurkVPN ничего никуда не отправляет.")
+                    .font(bodyFont)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .wraps()
-                Button { model.reviewConsent() } label: {
-                    Text("Посмотреть ещё раз").padding(.horizontal, 8)
+                let review = Button { model.reviewConsent() } label: {
+                    Text("Посмотреть ещё раз").padding(.horizontal, 12)
                 }
                 .glassButtonStyle(prominent: true)
-                .controlSize(.large)
+                .largeControlSize()
                 .padding(.top, 8)
+                #if os(tvOS)
+                review.focused($reviewFocused)
+                #else
+                review
+                #endif
             }
-            .padding(24)
-            .frame(maxWidth: 480)
+            .padding(outerPadding)
+            .frame(maxWidth: maxWidth)
         }
+        #if os(tvOS)
+        .defaultFocus($reviewFocused, true)
+        .onAppear { reviewFocused = true }
+        #endif
     }
+
+    #if os(tvOS)
+    private var stackSpacing: CGFloat { 24 }
+    private var logoWidth: CGFloat { 170 }
+    private var headingFont: Font { .title2.weight(.semibold) }
+    private var bodyFont: Font { .callout }
+    private var outerPadding: CGFloat { 60 }
+    private var maxWidth: CGFloat { 920 }
+    #else
+    private var stackSpacing: CGFloat { 16 }
+    private var logoWidth: CGFloat { 96 }
+    private var headingFont: Font { .title3.weight(.semibold) }
+    private var bodyFont: Font { .body }
+    private var outerPadding: CGFloat { 24 }
+    private var maxWidth: CGFloat { 480 }
+    #endif
 }

@@ -2,7 +2,9 @@ import Combine
 import Foundation
 import SwiftUI
 import UIKit
+#if !os(tvOS)
 import UserNotifications
+#endif
 
 enum Ping: Equatable {
     case testing
@@ -53,10 +55,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var pinging = false
     @Published private(set) var importing = false
     @Published private(set) var refreshing = false
+    @Published private(set) var loggingOut = false
     @Published var keyError: String?
     @Published var pendingReplace: Core.Key?
+    #if !os(tvOS)
     /** Code of the TV that asked for this phone's key; the alert confirms sending it. */
     @Published var tvSend: String?
+    #endif
     @Published var toast: String?
     @Published var routing: RoutingSettings {
         didSet {
@@ -87,13 +92,19 @@ final class AppModel: ObservableObject {
         didSet {
             guard whitelistDetect != oldValue else { return }
             Store.whitelistDetect = whitelistDetect
-            if whitelistDetect { checkWhitelist() }
+            if whitelistDetect {
+                if consent == .given { checkWhitelist() }
+            } else {
+                cancelWhitelistCheck()
+            }
             // The check's sites go in or out of the tunnel's routes.
             scheduleReload()
         }
     }
+    #if !os(tvOS)
     /** Settings → «Уведомлять об отключении VPN» (the permission is asked when it is turned on). */
     @Published private(set) var notifyStops: Bool
+    #endif
     /** Settings → «Переподключаться автоматически». */
     @Published var autoReconnect: Bool {
         didSet {
@@ -112,8 +123,10 @@ final class AppModel: ObservableObject {
     }
     /** Until it is given nothing is sent anywhere: no config, subscription or account requests, no connecting. */
     @Published private(set) var consent: Consent
+    #if !os(tvOS)
     /** «Купить тариф» and «Продлить» on the plan card (PurchaseRegion). */
     @Published private(set) var showBuy = PurchaseRegion.phoneInRussia
+    #endif
 
     let vpn = VPNController()
     private var configFetchedAt = Date.distantPast
@@ -129,8 +142,15 @@ final class AppModel: ObservableObject {
     /** The newest white list switch already told about. */
     private var toldSwitchAt = Date()
     private var sharedObserver: NSObjectProtocol?
+    /** Re-runs a deferred whitelist check once a transitioning tunnel (.connecting/.stopping) settles. */
+    private var vpnStateWatch: AnyCancellable?
+    private var pendingWhitelistCheck = false
+    /** Incremented on every VPN state change so whitelist probes detect ABA transitions mid-flight. */
+    private var vpnTransitionCount = 0
+    #if !os(tvOS)
     /** Keeps the widgets up to date (watchWidgets). */
     private var widgetWatch: AnyCancellable?
+    #endif
     /** A key opened from a link (furkvpn://import) before the consent: added once it is given. */
     private var keyAfterConsent: String?
     /** The extension's ping bridge while the tunnel takes every connection, asked for before the pings. */
@@ -138,7 +158,9 @@ final class AppModel: ObservableObject {
 
     init() {
         config = Store.loadRemoteConfig()?.sanitized() ?? RemoteConfig()
-        subscription = Store.loadSubscription()
+        let loadedSubscription = Store.loadSubscription()
+        if loadedSubscription == nil { Store.cleanupOrphanedSubscriptionFiles() }
+        subscription = loadedSubscription
         account = Store.loadAccount()
         selectedKey = Store.selectedServer
         routing = Store.routing
@@ -147,7 +169,9 @@ final class AppModel: ObservableObject {
         pingOnOpen = Store.pingOnOpen
         whitelistDetect = Store.whitelistDetect
         whitelistCheck = Store.whitelistCheck
+        #if !os(tvOS)
         notifyStops = Store.notifyStops
+        #endif
         autoReconnect = Store.autoReconnect
         pushThroughVPN = Store.pushThroughVPN
         consent = Store.consentVersion >= Store.consentCurrent ? .given : Store.consentDeclined ? .declined : .ask
@@ -157,7 +181,22 @@ final class AppModel: ObservableObject {
         PhysicalNetwork.shared.onChange = { [weak self] in
             Task { @MainActor in self?.networkChanged() }
         }
+        #if !os(tvOS)
         watchWidgets()
+        #endif
+        vpnStateWatch = vpn.$state.dropFirst().sink { [weak self] state in
+            self?.vpnTransitionCount += 1
+            switch state {
+            case .idle, .connected:
+                Task { @MainActor [weak self] in
+                    guard let self, self.pendingWhitelistCheck else { return }
+                    self.pendingWhitelistCheck = false
+                    self.checkWhitelist(force: true)
+                }
+            case .connecting, .stopping:
+                break
+            }
+        }
         // The extension checked for white lists and maybe moved the server.
         SharedChange.observe()
         sharedObserver = NotificationCenter.default.addObserver(forName: SharedChange.local, object: nil, queue: .main) { [weak self] _ in
@@ -180,14 +219,18 @@ final class AppModel: ObservableObject {
             UIScrollView.appearance().showsHorizontalScrollIndicator = false
             consent = .given
             whitelistCheck = Demo.whitelistCheck
+            #if !os(tvOS)
             // The App Store's screenshots are for every country.
             showBuy = false
+            #endif
         }
         #endif
         #if DEMO
         if Demo.on { return }
         #endif
+        #if !os(tvOS)
         Task { showBuy = await PurchaseRegion.russia() }
+        #endif
     }
 
     // MARK: Consent
@@ -196,6 +239,7 @@ final class AppModel: ObservableObject {
         Store.consentVersion = Store.consentCurrent
         Store.consentDeclined = false
         consent = .given
+        Task { await vpn.syncStoredPayload() }
         // What the start would have done.
         onResume()
         if let key = keyAfterConsent {
@@ -209,7 +253,11 @@ final class AppModel: ObservableObject {
         Store.consentDeclined = true
         consent = .declined
         keyAfterConsent = nil
-        if vpn.state != .idle { vpn.disconnect() }
+        cancelWhitelistCheck()
+        networkTask?.cancel()
+        reloadTask?.cancel()
+        invalidatePings()
+        vpn.disableForConsentDecline()
     }
 
     /** The screen of the declined consent: the card again. */
@@ -222,6 +270,7 @@ final class AppModel: ObservableObject {
         return list.first { $0.key == selectedKey } ?? list.first
     }
 
+    #if !os(tvOS)
     // MARK: Widgets
 
     /**
@@ -267,6 +316,7 @@ final class AppModel: ObservableObject {
                 }
             }
     }
+    #endif
 
     func show(_ message: String) {
         toast = message
@@ -331,19 +381,58 @@ final class AppModel: ObservableObject {
     }
 
     /** Runs [operation] after the imports and refreshes queued before it; rethrows its error. */
-    private func enqueue(_ operation: @escaping @MainActor () async throws -> Void) async throws {
+    private func enqueue(cancellable: Bool = false, _ operation: @escaping @MainActor () async throws -> Void) async throws {
         let previous = subscriptionQueue
         let task = Task { @MainActor () -> Error? in
-            await previous?.value
             do {
+                if cancellable {
+                    try await Self.waitCancellable(previous)
+                } else {
+                    await previous?.value
+                }
+                if Task.isCancelled { return CancellationError() }
                 try await operation()
                 return nil
             } catch {
                 return error
             }
         }
-        subscriptionQueue = Task { _ = await task.value }
-        if let error = await task.value { throw error }
+        // Later operations must still wait for [previous] even if this cancellable task exits early.
+        subscriptionQueue = Task {
+            await previous?.value
+            _ = await task.value
+        }
+        let error: Error?
+        if cancellable {
+            error = await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } else {
+            error = await task.value
+        }
+        if let error { throw error }
+    }
+
+    private nonisolated static func waitCancellable(_ previous: Task<Void, Never>?) async throws {
+        guard let previous else { return }
+        try Task.checkCancellation()
+        let state = WaitState()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if let already = state.install(continuation) {
+                    continuation.resume(with: already)
+                    return
+                }
+                Task {
+                    await previous.value
+                    state.resume(.success(()))
+                }
+            }
+        } onCancel: {
+            state.resume(.failure(CancellationError()))
+        }
     }
 
     // MARK: Keys
@@ -354,6 +443,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard !importing else { return }
+        #if !os(tvOS)
         // The QR code of a TV (scanned here or opened from the camera app): send it our key.
         if let code = Core.tvCode(text) {
             if subscription == nil {
@@ -363,8 +453,14 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        #endif
         switch Core.parseKey(text, allowedHosts: config.allowedSubscriptionHosts) {
-        case .empty: keyError = "В буфере обмена пусто. Скопируйте ключ и попробуйте снова."
+        case .empty:
+            #if os(tvOS)
+            keyError = "Введите ссылку подписки — она начинается с https://"
+            #else
+            keyError = "В буфере обмена пусто. Скопируйте ключ и попробуйте снова."
+            #endif
         case .notALink: keyError = "Это не похоже на ключ. Скопируйте ссылку целиком — она начинается с https://"
         case .foreign: keyError = "Это не ключ FurkVPN. В приложение можно добавить только ключ FurkVPN."
         case let .ok(key):
@@ -386,6 +482,38 @@ final class AppModel: ObservableObject {
         importKey(key)
     }
 
+    /** Downloads and applies [key] inside [enqueue]. */
+    private func applyDownloadedKey(_ key: Core.Key) async throws {
+        let downloaded = try await SubscriptionLoader.download(key, config: config)
+        try Task.checkCancellation()
+        let info = SubscriptionLoader.info(for: key, downloaded)
+        guard Store.saveSubscription(info, configs: downloaded.configs) else {
+            throw SubscriptionError.saveFailed
+        }
+        invalidatePings()
+        Store.clearAccount()
+        subscription = info
+        account = nil
+        select(info.selectable.first?.key, reconnect: false)
+        // White lists are looked for afresh: a check made before this key had no server to move,
+        // and "on already" never moves one.
+        Store.whitelistCheck = nil
+        Store.whitelistAutoSwitched = nil
+        Store.whitelistPrevious = nil
+        whitelistCheck = nil
+        show("Ключ добавлен")
+        // Model-owned follow-up: survives view teardown when onboarding switches to the dashboard.
+        checkWhitelist(force: true)
+        Task { [weak self] in
+            await self?.refreshAccount(key.url, force: true)
+        }
+        if vpn.isActive {
+            await vpn.reload()
+        } else {
+            await vpn.syncStoredPayload()
+        }
+    }
+
     private func importKey(_ key: Core.Key) {
         importing = true
         Task {
@@ -393,31 +521,30 @@ final class AppModel: ObservableObject {
             do {
                 try await enqueue { [weak self] in
                     guard let self else { return }
-                    let wasActive = self.vpn.isActive
-                    let downloaded = try await SubscriptionLoader.download(key, config: self.config)
-                    let info = SubscriptionLoader.info(for: key, downloaded)
-                    Store.saveSubscription(info, configs: downloaded.configs)
-                    Store.clearAccount()
-                    self.subscription = info
-                    self.account = nil
-                    self.pings = [:]
-                    self.select(info.selectable.first?.key, reconnect: false)
-                    // White lists are looked for afresh: a check made before this key had no server to move,
-                    // and "on already" never moves one.
-                    Store.whitelistCheck = nil
-                    Store.whitelistAutoSwitched = nil
-                    Store.whitelistPrevious = nil
-                    self.whitelistCheck = nil
-                    self.show("Ключ добавлен")
-                    if wasActive { await self.vpn.reload() }
+                    try await self.applyDownloadedKey(key)
                 }
-                checkWhitelist()
-                await refreshAccount(key.url, force: true)
             } catch {
                 keyError = (error as? LocalizedError)?.errorDescription ?? SubscriptionError.network(error).errorDescription
             }
         }
     }
+
+    #if os(tvOS)
+    /** Imports a key received via TV QR pairing; throws so the pairing screen can show its own error state. */
+    func importPairedKey(_ text: String) async throws {
+        await refreshConfig()
+        try Task.checkCancellation()
+        guard case let .ok(key) = Core.parseKey(text, allowedHosts: config.allowedSubscriptionHosts) else {
+            throw SubscriptionError.foreign
+        }
+        importing = true
+        defer { importing = false }
+        try await enqueue(cancellable: true) { [weak self] in
+            guard let self else { return }
+            try await self.applyDownloadedKey(key)
+        }
+    }
+    #endif
 
     /** Re-downloads the current subscription; keeps the old copy on failure. Run it through [enqueue]. */
     private func refreshNow() async throws {
@@ -434,10 +561,21 @@ final class AppModel: ObservableObject {
         let downloaded = try await SubscriptionLoader.download(key, config: config)
         let info = SubscriptionLoader.info(for: key, downloaded)
         let oldConfig = selectedServer.flatMap { Store.config(for: $0.key) }
-        Store.saveSubscription(info, configs: downloaded.configs)
+        let oldServers = Core.subscriptionServers(Store.allConfigs())
+        guard Store.saveSubscription(info, configs: downloaded.configs) else {
+            throw SubscriptionError.saveFailed
+        }
         subscription = info
-        // The tunnel is rebuilt when the selected server's config changed.
-        if vpn.isActive, let server = selectedServer, Store.config(for: server.key) != oldConfig { await vpn.reload() }
+        // Update tunnel/profile whenever the selected server's config OR the subscription's server host list changed.
+        let selectedChanged = selectedServer.map { Store.config(for: $0.key) != oldConfig } ?? false
+        let serversChanged = Core.subscriptionServers(downloaded.configs) != oldServers
+        if selectedChanged || serversChanged {
+            if vpn.isActive {
+                await vpn.reload()
+            } else {
+                await vpn.syncStoredPayload()
+            }
+        }
     }
 
     func refreshSubscription(showMessage: Bool) {
@@ -466,26 +604,61 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func logout() {
-        vpn.disconnect()
-        Task {
-            try? await enqueue { [weak self] in
-                guard let self else { return }
-                Store.clearSubscription()
-                self.subscription = nil
-                self.account = nil
-                self.selectedKey = nil
-                self.pings = [:]
-                self.whitelistCheck = nil
-            }
+    private enum LogoutError: LocalizedError {
+        case localStorage
+
+        var errorDescription: String? {
+            "Не удалось удалить сохранённый ключ. Попробуйте снова."
         }
     }
 
+    func logout() {
+        Task { _ = await logoutNow() }
+    }
+
+    /** Stops the tunnel, removes the saved VPN profile/payload, and clears stored subscription data. */
+    @discardableResult
+    func logoutNow() async -> Bool {
+        guard !loggingOut else { return false }
+        loggingOut = true
+        defer { loggingOut = false }
+        do {
+            try await enqueue { [weak self] in
+                guard let self else { return }
+                try await self.vpn.clearOnLogout()
+                self.cancelWhitelistCheck()
+                self.invalidatePings()
+                guard Store.clearSubscription() else {
+                    // Keep the current view mounted so the user can retry deleting any remaining local files.
+                    throw LogoutError.localStorage
+                }
+                self.subscription = nil
+                self.account = nil
+                self.selectedKey = nil
+                self.whitelistCheck = nil
+            }
+            return true
+        } catch {
+            if let logoutError = error as? LogoutError, let message = logoutError.errorDescription {
+                show(message)
+            } else {
+                show("Не удалось удалить профиль VPN: \(error.localizedDescription)")
+            }
+            return false
+        }
+    }
+
+    #if !os(tvOS)
     // MARK: TV
 
     func confirmTvSend() {
-        guard let code = tvSend, let key = subscription?.url else { return }
+        guard let code = tvSend, subscription != nil else { return }
         tvSend = nil
+        sendTvKey(code)
+    }
+
+    func sendTvKey(_ code: String) {
+        guard let key = subscription?.url else { return }
         Task {
             var status = 0
             if let url = URL(string: Http.apiBase + "/api/v1/tv/send") {
@@ -500,29 +673,70 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    #endif
 
     // MARK: White lists
 
+    private var whitelistRun = 0
+    private var whitelistRetryTask: Task<Void, Never>?
+
+    private func cancelWhitelistCheck() {
+        whitelistRun += 1
+        pendingWhitelistCheck = false
+        whitelistTask?.cancel()
+        whitelistTask = nil
+        whitelistRetryTask?.cancel()
+        whitelistRetryTask = nil
+        whitelistRetries = 0
+        whitelistChecking = false
+    }
+
     /**
      * Checks for white lists now: without the VPN the app asks the sites itself; with it the extension does
-     * (only it gets past its tunnel to them) and moves the server if it has to. Nothing while connecting.
+     * (only it gets past its tunnel to them) and moves the server if it has to. Deferred while transitioning.
      */
-    func checkWhitelist() {
-        guard whitelistDetect, whitelistTask == nil else { return }
+    func checkWhitelist(force: Bool = false) {
+        guard consent == .given, whitelistDetect else { return }
+        if whitelistTask != nil {
+            guard force else { return }
+            whitelistTask?.cancel()
+        }
         #if DEMO
         if Demo.on { return }
         #endif
+        pendingWhitelistCheck = false
+        whitelistRetryTask?.cancel()
+        whitelistRetryTask = nil
+        whitelistRun += 1
+        let run = whitelistRun
+        let generation = subscriptionGeneration
         whitelistChecking = true
         whitelistTask = Task {
             defer {
-                whitelistChecking = false
-                whitelistTask = nil
+                if self.whitelistRun == run {
+                    self.whitelistChecking = false
+                    self.whitelistTask = nil
+                }
             }
             // On a cold start the VPN's state is not known yet: ours, already on, would pass for somebody else's.
             await vpn.loaded()
+            guard !Task.isCancelled, run == self.whitelistRun, consent == .given, whitelistDetect, generation == self.subscriptionGeneration else { return }
             otherVPN = false
             if vpn.isConnected {
-                guard let data = await vpn.send(.whitelist), let check = try? JSONDecoder().decode(WhitelistCheck.self, from: data) else { return }
+                let transition = vpnTransitionCount
+                let data = await vpn.send(.whitelist)
+                guard !Task.isCancelled, run == self.whitelistRun, consent == .given, whitelistDetect, generation == self.subscriptionGeneration else { return }
+                guard let data, let check = try? JSONDecoder().decode(WhitelistCheck.self, from: data) else {
+                    // The tunnel changed state (including connected → stopping → connected) mid-request: retry.
+                    if transition != vpnTransitionCount || !vpn.isConnected {
+                        if vpn.isConnected || vpn.state == .idle {
+                            Task { @MainActor [weak self] in self?.checkWhitelist(force: true) }
+                        } else {
+                            pendingWhitelistCheck = true
+                        }
+                    }
+                    return
+                }
                 whitelistCheck = check
                 syncShared()
             } else if vpn.state == .idle {
@@ -531,32 +745,48 @@ final class AppModel: ObservableObject {
                     otherVPN = true
                     return
                 }
+                let transition = vpnTransitionCount
                 let config = self.config.whitelist
                 let network = PhysicalNetwork.shared.kind
                 // White lists just found are asked about once more before the server is moved.
                 var check = await Task.detached(priority: .userInitiated) {
                     Whitelist.confirmed(Whitelist.check(config, network: network)) { Whitelist.check(config, network: network) }
                 }.value
-                // The VPN came up meanwhile: the extension checks from now on.
-                guard vpn.state == .idle else { return }
+                // Recheck consent, setting, and subscription generation after the detached probe.
+                guard !Task.isCancelled, run == self.whitelistRun, consent == .given, whitelistDetect, generation == self.subscriptionGeneration else { return }
+                guard transition == vpnTransitionCount, vpn.state == .idle else {
+                    // The VPN changed state while probing (including idle → connecting → idle): re-run cleanly.
+                    if vpn.isConnected || vpn.state == .idle {
+                        Task { @MainActor [weak self] in self?.checkWhitelist(force: true) }
+                    } else {
+                        pendingWhitelistCheck = true
+                    }
+                    return
+                }
                 if let target = Whitelist.apply(&check) {
                     selectedKey = target.key
                     toldSwitchAt = check.time
                     show(check.status == .whitelist ? "Включены белые списки — переключили на \(target.displayName)"
                         : "Белые списки выключены — вернули \(target.displayName)")
+                    Task { [weak self] in await self?.vpn.syncStoredPayload() }
                 }
                 whitelistCheck = check
                 // "Nothing works" a moment after a new network or a wake-up is often just too early: asked again
                 // soon, not left on the card until the app is opened next.
                 if check.status == .noInternet, whitelistRetries < 2 {
                     whitelistRetries += 1
-                    Task {
+                    whitelistRetryTask?.cancel()
+                    whitelistRetryTask = Task { [weak self] in
                         try? await Task.sleep(nanoseconds: 10_000_000_000)
-                        checkWhitelist()
+                        guard !Task.isCancelled else { return }
+                        self?.checkWhitelist()
                     }
                 } else if check.status != .noInternet {
                     whitelistRetries = 0
                 }
+            } else {
+                // Tunnel is connecting or stopping: re-run once it settles to .connected or .idle.
+                pendingWhitelistCheck = true
             }
         }
     }
@@ -568,11 +798,12 @@ final class AppModel: ObservableObject {
 
     private func networkChanged() {
         networkTask?.cancel()
+        guard consent == .given else { return }
         networkTask = Task {
             // Let the new network settle. With the VPN on the extension checks by itself once the tunnel is on
             // the new network: asked now, it would answer from the old one ("nothing works").
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if !Task.isCancelled, !vpn.isConnected { checkWhitelist() }
+            if !Task.isCancelled, consent == .given, !vpn.isConnected { checkWhitelist() }
         }
     }
 
@@ -594,6 +825,7 @@ final class AppModel: ObservableObject {
         return !Whitelist.pingKeys(info.servers, config: config.whitelist).isEmpty
     }
 
+    #if !os(tvOS)
     // MARK: Notifications
 
     /** Turns «Уведомлять об отключении VPN» on (asking iOS for permission) or off. */
@@ -611,6 +843,7 @@ final class AppModel: ObservableObject {
             if !granted { show("Разрешите уведомления FurkVPN в настройках iOS") }
         }
     }
+    #endif
 
     // MARK: Servers
 
@@ -618,7 +851,13 @@ final class AppModel: ObservableObject {
     func select(_ key: String?, reconnect: Bool = true) {
         selectedKey = key
         Store.selectByHand(key)
-        if reconnect, vpn.isActive { Task { await vpn.reload() } }
+        if reconnect {
+            if vpn.isActive {
+                Task { await vpn.reload() }
+            } else {
+                Task { await vpn.syncStoredPayload() }
+            }
+        }
     }
 
     /** Settings changed while connected: rebuild the tunnel once they settle. */
@@ -628,24 +867,44 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             guard !Task.isCancelled else { return }
             // «Локальная сеть напрямую» is in the profile too while the tunnel takes every connection.
-            guard vpn.isActive else { return await vpn.profileSettingsChanged() }
+            guard vpn.isActive else {
+                await vpn.profileSettingsChanged()
+                await vpn.syncStoredPayload()
+                return
+            }
             await vpn.reload()
         }
     }
 
+    private struct MeasureKey: Hashable {
+        var generation: Int
+        var key: String
+    }
+
     private var pingTask: Task<Void, Never>?
     private var pingRun = 0
+    /** Incremented on key replace, logout, and consent decline so stale ping/whitelist results are discarded. */
+    private var subscriptionGeneration = 0
     /** Shared by restarted runs: a cancelled run's measurements keep their slot until they finish. */
     private let pingLimit = AsyncLimiter(6)
-    /** Servers whose ping is being measured right now. Queued ones aren't here. */
-    private var measuring = Set<String>()
+    /** Servers whose ping is being measured right now (tagged by subscription generation). */
+    private var measuring = Set<MeasureKey>()
+
+    private func invalidatePings() {
+        subscriptionGeneration += 1
+        pingTask?.cancel()
+        pingRun += 1
+        pinging = false
+        pings = [:]
+    }
 
     /** Pressed again while pinging: starts over, like Happ. */
     func testPings() {
-        guard let info = subscription else { return }
+        guard consent == .given, let info = subscription else { return }
         pingTask?.cancel()
         pingRun += 1
         let run = pingRun
+        let generation = subscriptionGeneration
         var servers = info.servers.filter(\.pingable)
         if pingWhitelistOnly {
             let keys = Whitelist.pingKeys(info.servers, config: config.whitelist)
@@ -655,13 +914,19 @@ final class AppModel: ObservableObject {
         for s in servers { pings[s.key] = .testing }
         pingTask = Task {
             await self.useServerAddresses()
+            guard !Task.isCancelled, generation == self.subscriptionGeneration else {
+                if run == self.pingRun { self.pinging = false }
+                return
+            }
             await withTaskGroup(of: Void.self) { group in
                 for entry in servers {
                     group.addTask { @MainActor in
                         await self.pingLimit.acquire()
+                        let measureKey = MeasureKey(generation: generation, key: entry.key)
                         // Already pinged by a long press, or still being measured (it will report).
-                        if !Task.isCancelled, self.pings[entry.key] == .testing, !self.measuring.contains(entry.key) {
-                            await self.measure(entry)
+                        if !Task.isCancelled, generation == self.subscriptionGeneration,
+                           self.pings[entry.key] == .testing, !self.measuring.contains(measureKey) {
+                            await self.measure(entry, generation: generation)
                         }
                         await self.pingLimit.release()
                     }
@@ -673,11 +938,14 @@ final class AppModel: ObservableObject {
 
     /** Long press on a server or auto-select: ping just this one, also when it waits in the "ping all" queue. */
     func pingServer(_ entry: ServerEntry) {
-        guard entry.pingable, !measuring.contains(entry.key) else { return }
+        let generation = subscriptionGeneration
+        let measureKey = MeasureKey(generation: generation, key: entry.key)
+        guard consent == .given, entry.pingable, !measuring.contains(measureKey) else { return }
         pings[entry.key] = .testing
         Task {
             await useServerAddresses()
-            await measure(entry)
+            guard generation == self.subscriptionGeneration else { return }
+            await measure(entry, generation: generation)
         }
     }
 
@@ -704,13 +972,15 @@ final class AppModel: ObservableObject {
     }
 
     /**
-     * The core can't be interrupted: a started measurement reports even if its run was restarted.
+     * The core can't be interrupted: a started measurement reports even if its run was restarted,
+     * unless the subscription changed in the meantime.
      * Always measured in the app: with the VPN on, the test's connections are bound to the phone's
      * own network, past the tunnel (in the tunnel extension the tests would get it killed for memory).
      */
-    private func measure(_ entry: ServerEntry) async {
-        measuring.insert(entry.key)
-        defer { measuring.remove(entry.key) }
+    private func measure(_ entry: ServerEntry, generation: Int) async {
+        let measureKey = MeasureKey(generation: generation, key: entry.key)
+        measuring.insert(measureKey)
+        defer { measuring.remove(measureKey) }
         let url = config.delayTestUrl
         let bridge = vpn.isActive ? pingBridge : nil
         let interface = vpn.isActive && bridge == nil ? PhysicalNetwork.shared.interfaceName : nil
@@ -721,6 +991,7 @@ final class AppModel: ObservableObject {
                 return Core.ping(config: raw, url: url, interface: interface)
             }.value
         }
+        guard generation == subscriptionGeneration else { return }
         pings[entry.key] = ms.map(Ping.ok) ?? .failed
     }
 
@@ -738,10 +1009,39 @@ final class AppModel: ObservableObject {
         routing.setRules(action, [])
     }
 
+    #if !os(tvOS)
     // MARK: Links
 
     var renewUrl: URL? {
         if let id = subscription?.shortId, !id.isEmpty { return URL(string: config.site.renewalUrl(id)) }
         return URL(string: config.renewUrl)
+    }
+    #endif
+}
+
+private final class WaitState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var finished: Result<Void, Error>?
+
+    func install(_ c: CheckedContinuation<Void, Error>) -> Result<Void, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let finished { return finished }
+        continuation = c
+        return nil
+    }
+
+    func resume(_ result: Result<Void, Error>) {
+        lock.lock()
+        guard finished == nil else {
+            lock.unlock()
+            return
+        }
+        finished = result
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume(with: result)
     }
 }

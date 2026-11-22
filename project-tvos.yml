@@ -1,0 +1,64 @@
+name: FurkVPN-TV
+options:
+  deploymentTarget:
+    tvOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.3.6"
+    CURRENT_PROJECT_VERSION: "25"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_ENTITLEMENTS: FurkTV/FurkTV.entitlements
+targetTemplates:
+  FurkTVTarget:
+    platform: tvOS
+    dependencies:
+      - framework: Frameworks/tvOS/Libxray.xcframework
+        embed: false
+      - sdk: libresolv.tbd
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+      - sdk: NetworkExtension.framework
+targets:
+  FurkTV:
+    templates: [FurkTVTarget]
+    type: application
+    sources:
+      - path: FurkTV
+        excludes: ["*.entitlements"]
+      - Shared
+      - FurkVPN/AppModel.swift
+      - FurkVPN/Demo.swift
+      - FurkVPN/Format.swift
+      - FurkVPN/Http.swift
+      - FurkVPN/OtherVPN.swift
+      - FurkVPN/PhysicalNetwork.swift
+      - FurkVPN/Platform.swift
+      - FurkVPN/SignatureReport.swift
+      - FurkVPN/VPNController.swift
+      - path: FurkVPN/Views
+        excludes: ["ScannerView.swift"]
+      - FurkVPN/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.furkvpn.app
+        PRODUCT_NAME: FurkVPN
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: FurkVPN
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    dependencies:
+      - target: FurkTVTunnel
+  FurkTVTunnel:
+    templates: [FurkTVTarget]
+    type: app-extension
+    sources: [FurkTunnel, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.furkvpn.app.tunnel
+        INFOPLIST_FILE: FurkTunnel/Info.plist
+schemes:
+  FurkVPN-TV:
+    build:
+      targets:
+        FurkTV: all

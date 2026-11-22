@@ -36,12 +36,16 @@ struct WhitelistCard: View {
             Button(action: onDetails) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Белые списки").font(.headline)
+                        Text("Белые списки")
+                            .font(titleFont)
                         Text(otherVPN ? "Включён другой VPN — проверка не покажет, что блокирует оператор" : status.text)
-                            .font(.subheadline)
+                            .font(detailFont)
                             .foregroundColor(otherVPN ? .orange : .secondary)
                             .wraps()
-                        Text("Подробнее").font(.subheadline.weight(.semibold)).foregroundColor(.accentColor).padding(.top, 2)
+                        Text("Подробнее")
+                            .font(detailFont.weight(.semibold))
+                            .foregroundColor(.accentColor)
+                            .padding(.top, 2)
                     }
                     Spacer()
                     if otherVPN {
@@ -49,16 +53,31 @@ struct WhitelistCard: View {
                     } else {
                         StatusDot(status: status, checking: model.whitelistChecking)
                     }
+                    #if os(tvOS)
+                    TVCardChevron()
+                    #endif
                 }
                 .foregroundColor(.primary)
                 .card()
                 .contentShape(Rectangle())
             }
+            #if os(tvOS)
+            .glassInteractiveButton(RoundedRectangle(cornerRadius: 26, style: .continuous), scale: 1.03, ringColor: .accentColor, ringOpacity: 0.9)
+            #else
             .buttonStyle(.plain)
+            #endif
         }
     }
 
     private var status: WhitelistStatus { model.whitelistCheck?.status ?? .unknown }
+
+    #if os(tvOS)
+    private var titleFont: Font { .callout.weight(.semibold) }
+    private var detailFont: Font { .caption }
+    #else
+    private var titleFont: Font { .headline }
+    private var detailFont: Font { .subheadline }
+    #endif
 }
 
 private struct StatusDot: View {
@@ -68,7 +87,11 @@ private struct StatusDot: View {
     var body: some View {
         ZStack {
             if checking {
+                #if os(tvOS)
+                ProgressView().scaleEffect(0.65)
+                #else
                 ProgressView()
+                #endif
             } else {
                 Circle().fill(status.color).frame(width: 12, height: 12)
             }
@@ -86,21 +109,47 @@ struct WhitelistSheet: View {
     var body: some View {
         let check = model.whitelistCheck
         let status = check?.status ?? .unknown
+        #if os(tvOS)
+        NavigationStack {
+            TVDetailLayout(icon: "checklist", caption: status.text, tint: status == .unknown ? .accentColor : status.color) {
+                list(check: check, status: status)
+            }
+            .navigationTitle("Белые списки")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
+            }
+        }
+        #else
         NavigationView {
-            List {
-                if model.otherVPN && vpn.state == .idle {
-                    Section {
+            list(check: check, status: status)
+                .navigationTitle("Белые списки")
+                .navigationBarTitleDisplayMode(.inline)
+                .barItem(.confirmationAction) { Button("Закрыть") { dismiss() } }
+        }
+        .sheetGlass()
+        #endif
+    }
+
+    private func list(check: WhitelistCheck?, status: WhitelistStatus) -> some View {
+        List {
+            if model.otherVPN && vpn.state == .idle {
+                Section {
+                    infoRow {
                         Label("Включён другой VPN. Пока он работает, сайты открываются через него, и проверка не покажет, что блокирует оператор. Выключите его или подключите FurkVPN — тогда проверит наш VPN.",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
                             .foregroundColor(.orange)
                     }
                 }
-                Section {
+            }
+            Section {
+                infoRow {
                     HStack(spacing: 12) {
                         StatusDot(status: status, checking: false)
                         Text(status.text).wraps()
                     }
+                }
+                infoRow {
                     if let check {
                         Text("Последняя проверка: \(Format.dateTime(check.time)) · сеть: \(networkName(check.network))")
                             .font(.subheadline)
@@ -109,49 +158,60 @@ struct WhitelistSheet: View {
                         Text("Проверки ещё не было").font(.subheadline).foregroundColor(.secondary)
                     }
                 }
-                if let check {
-                    probes("Закрываются белыми списками", check.blocked)
-                    probes("Открыты и при белых списках", check.allowed)
-                }
-                Section(footer: Text("Если Google не отвечает, а VK и Яндекс открываются, значит, оператор включил белые списки.")) {
+            }
+            if let check {
+                probes("Закрываются белыми списками", check.blocked)
+                probes("Открыты и при белых списках", check.allowed)
+            }
+            Section(footer: Text("Если Google не отвечает, а VK и Яндекс открываются, значит, оператор включил белые списки.")) {
+                infoRow {
                     Label("Проверка выполняется без VPN — напрямую через вашего оператора, поэтому видно, что он блокирует на самом деле.",
                           systemImage: "info.circle")
                         .font(.subheadline)
                 }
-                Section {
-                    Button {
-                        model.checkWhitelist()
-                    } label: {
-                        HStack {
-                            Text("Проверить снова")
-                            Spacer()
-                            if model.whitelistChecking { ProgressView() }
-                        }
-                    }
-                    .disabled(model.whitelistChecking)
-                }
             }
-            .navigationTitle("Белые списки")
-            .navigationBarTitleDisplayMode(.inline)
-            .barItem(.confirmationAction) { Button("Закрыть") { dismiss() } }
+            Section {
+                Button {
+                    model.checkWhitelist()
+                } label: {
+                    HStack {
+                        Text("Проверить снова")
+                        Spacer()
+                        if model.whitelistChecking { ProgressView() }
+                    }
+                }
+                .disabled(model.whitelistChecking)
+            }
         }
-        .sheetGlass()
     }
 
     private func probes(_ title: String, _ results: [ProbeResult]) -> some View {
         Section(header: Text(title)) {
             ForEach(results, id: \.self) { probe in
-                HStack(spacing: 12) {
-                    Image(systemName: probe.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundColor(probe.ok ? .good : .red)
-                    Text(probe.host)
-                    Spacer()
-                    Text(answer(probe))
-                        .font(.subheadline)
-                        .foregroundColor(probe.ok ? .secondary : .red)
+                infoRow {
+                    HStack(spacing: 12) {
+                        Image(systemName: probe.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(probe.ok ? .good : .red)
+                        Text(probe.host)
+                        Spacer()
+                        Text(answer(probe))
+                            .font(.subheadline)
+                            .foregroundColor(probe.ok ? .secondary : .red)
+                    }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func infoRow<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        #if os(tvOS)
+        Button {} label: {
+            content().frame(maxWidth: .infinity, alignment: .leading)
+        }
+        #else
+        content()
+        #endif
     }
 
     private func answer(_ probe: ProbeResult) -> String {

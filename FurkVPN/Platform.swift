@@ -7,7 +7,11 @@ enum Platform {
     static let isMac = ProcessInfo.processInfo.isMacCatalystApp
 
     /** For the panel's device list and the User-Agent. */
+    #if os(tvOS)
+    static let osName = "tvOS"
+    #else
     static let osName = isMac ? "macOS" : "iOS"
+    #endif
 
     /** "26.1": on a Mac the version of macOS, not of the iOS it imitates. */
     static let osVersion: String = {
