@@ -4,6 +4,13 @@ import UIKit
 struct SettingsView: View {
     /** The main screen shows the server list next to it: the side can be chosen. */
     var wide = false
+    #if os(tvOS)
+    /**
+     * Inside the Apple TV Настройки tab: the tab bar names the screen and the tab draws the backdrop and the
+     * sidebar, so the form brings neither a title nor a background of its own.
+     */
+    var embedded = false
+    #endif
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var confirmLogout = false
@@ -21,14 +28,17 @@ struct SettingsView: View {
 
     var body: some View {
         #if os(tvOS)
-        ZStack {
-            BrandBackdrop()
-            settingsForm
-                .tint(.primary)
-                .frame(maxWidth: 1120)
-                .padding(.top, 12)
+        Group {
+            if embedded {
+                settingsForm
+                    .tint(.primary)
+            } else {
+                TVDetailLayout(icon: "gearshape.fill", caption: "FurkVPN для Apple TV\nВерсия \(Http.appVersion)") {
+                    settingsForm
+                }
+            }
         }
-        .navigationTitle("Настройки")
+        .navigationTitle(embedded ? "" : "Настройки")
         .navigationDestination(isPresented: $showPairing) {
             TVPairingView(title: "Сменить ключ") {
                 showPairing = false
@@ -375,12 +385,8 @@ private struct DiagnosticsView: View {
         .inlineNavigationBar()
 
         #if os(tvOS)
-        ZStack {
-            BrandBackdrop()
+        TVDetailLayout(icon: "stethoscope", caption: "Почему VPN не подключается: подпись сборки, профиль и ответ расширения") {
             form
-                .tint(.primary)
-                .frame(maxWidth: 1120)
-                .padding(.top, 16)
         }
         #else
         form

@@ -34,6 +34,7 @@ struct TVPairingView: View {
     @State private var errorMessage: String?
     @State private var importing = false
     @State private var attempt = 0
+    @FocusState private var refreshFocused: Bool
 
     var body: some View {
         ZStack {
@@ -76,6 +77,7 @@ struct TVPairingView: View {
                             }
                             .glassButtonStyle(prominent: errorMessage != nil)
                             .disabled(importing)
+                            .focused($refreshFocused)
 
                             Button("Назад") { dismiss() }
                                 .glassButtonStyle()
@@ -92,6 +94,8 @@ struct TVPairingView: View {
             .padding(.vertical, 60)
             .frame(maxWidth: WideLayout.maxWidth)
         }
+        .defaultFocus($refreshFocused, true)
+        .onAppear { refreshFocused = true }
         .task(id: attempt) { await pair() }
     }
 
@@ -100,7 +104,7 @@ struct TVPairingView: View {
             Text("\(number)")
                 .font(.caption.weight(.bold))
                 .foregroundColor(.onAccent)
-                .frame(width: 38, height: 38)
+                .frame(width: 44, height: 44)
                 .background(Color.accentColor, in: Circle())
             Text(text)
                 .font(.callout)

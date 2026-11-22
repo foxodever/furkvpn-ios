@@ -7,45 +7,14 @@ struct HomeView: View {
     #if !os(tvOS)
     @State private var showSupport = false
     @State private var showProxies = false
-    #else
-    @FocusState private var connectFocused: Bool
-    @State private var showAnnouncement = false
     #endif
     /** The list stands next to the main screen: no sheet for it, and Settings can move it to the other side. */
     @State private var wide = false
 
     var body: some View {
         #if os(tvOS)
-        NavigationStack {
-            ZStack {
-                BrandBackdrop()
-                VStack(spacing: 12) {
-                    tvTopBar
-                    tvWideLayout
-                }
-                .padding(.horizontal, 80)
-                .padding(.top, 24)
-                .padding(.bottom, 30)
-                .ignoresSafeArea()
-            }
-            .onAppear {
-                wide = true
-                connectFocused = true
-            }
-            #if DEMO
-            .task {
-                if Demo.settings { model.settingsOpen = true }
-            }
-            #endif
-            .navigationDestination(isPresented: $model.settingsOpen) {
-                SettingsView(wide: true)
-            }
-        }
-        .fullScreenCover(isPresented: $showAnnouncement) {
-            if let announce = model.subscription?.announce {
-                TVAnnouncementSheet(text: announce)
-            }
-        }
+        // Apple TV: native top tab bar (Главная · Серверы · Настройки) built from the same components.
+        TVMainTabs()
         #else
         NavigationView {
             GeometryReader { geo in
@@ -96,59 +65,7 @@ struct HomeView: View {
         #endif
     }
 
-    #if os(tvOS)
-    /** Centered brand mark and trailing glass gear button, matching the wide iPhone Duo / iPad / Mac header. */
-    private var tvTopBar: some View {
-        ZStack {
-            Image("Logo")
-                .resizable()
-                .scaledToFit()
-                .frame(height: 46)
-                .foregroundColor(.primary)
-            HStack {
-                Spacer()
-                Button { model.settingsOpen = true } label: {
-                    Image(systemName: "gearshape")
-                        .font(.callout.weight(.medium))
-                        .foregroundColor(.primary)
-                        .frame(width: 60, height: 60)
-                        .glassSurface(Circle(), fallback: .cardHigh)
-                }
-                .glassInteractiveButton(Circle(), scale: 1.08)
-                .accessibilityLabel("Настройки")
-            }
-        }
-        .frame(height: 64)
-        .focusSection()
-    }
-
-    /** Equal two-half layout (same 50/50 split as the unfolded iPhone Duo, iPad and Mac). */
-    private var tvWideLayout: some View {
-        HStack(spacing: WideLayout.gap) {
-            if model.serversOnLeft {
-                ServersPane()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .focusSection()
-            }
-            ScrollView(.vertical, showsIndicators: false) {
-                homeColumn
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 14)
-            }
-            .padding(.horizontal, -18)
-            .padding(.vertical, -14)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .focusSection()
-            if !model.serversOnLeft {
-                ServersPane()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .focusSection()
-            }
-        }
-        .frame(maxWidth: WideLayout.maxWidth, maxHeight: .infinity)
-        .frame(maxWidth: .infinity)
-    }
-    #else
+    #if !os(tvOS)
     /**
      * Unfolded iPhone Duo, iPad, Mac: the main screen on one half, the server list on the other, the gap
      * between them in the middle, where the Duo folds. The list is on the right unless moved to the left.
@@ -170,45 +87,28 @@ struct HomeView: View {
         .padding(WideLayout.centering(geo))
         .frame(maxWidth: .infinity)
     }
-    #endif
 
     /** The main screen itself: state, the connect button and the speed, then the cards under them. */
     private var homeColumn: some View {
         VStack(spacing: 0) {
             StatusHeader(state: vpn.state).padding(.top, homeTopPadding)
             Spacer().frame(height: connectTopGap)
-            let connect = ConnectButton(state: vpn.state) {
+            ConnectButton(state: vpn.state) {
                 toggleVPN()
             }
-            #if os(tvOS)
-            connect.focused($connectFocused)
-            #else
-            connect
-            #endif
             TrafficRow()
             Spacer().frame(height: cardsTopGap)
             cards
         }
         .padding(.bottom, 16)
-        // On big tablets and Apple TV the cards stay within a comfortable column width.
+        // On big tablets the cards stay within a comfortable column width.
         .frame(maxWidth: WideLayout.homeColumnMaxWidth)
         .frame(maxWidth: .infinity)
     }
 
     private func toggleVPN() {
         if vpn.state == .idle {
-            Task {
-                #if os(tvOS)
-                await vpn.loaded()
-                if vpn.state == .idle {
-                    await vpn.connect()
-                } else if vpn.state != .stopping {
-                    vpn.disconnect()
-                }
-                #else
-                await vpn.connect()
-                #endif
-            }
+            Task { await vpn.connect() }
         } else if vpn.state != .stopping {
             vpn.disconnect()
         }
@@ -229,26 +129,12 @@ struct HomeView: View {
                 .padding(.top, cardGap)
             if let announce = model.subscription?.announce,
                !announce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                #if os(tvOS)
-                Button { showAnnouncement = true } label: {
-                    Text(announce)
-                        .font(.caption)
-                        .foregroundColor(.primary)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                        .card()
-                }
-                .glassInteractiveButton(RoundedRectangle(cornerRadius: 26, style: .continuous), scale: 1.03, ringColor: .accentColor, ringOpacity: 0.9)
-                .padding(.top, cardGap)
-                #else
                 Text(Linkify.text(announce))
                     .font(.subheadline)
                     .wraps()
                     .card()
                     .padding(.top, cardGap)
-                #endif
             }
-            #if !os(tvOS)
             QuickActions(onSupport: { showSupport = true })
                 .padding(.top, 20)
             if !model.config.telegramProxies.isEmpty {
@@ -270,16 +156,9 @@ struct HomeView: View {
                 .glassInteractiveButton(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .padding(.top, 8)
             }
-            #endif
         }
     }
 
-    #if os(tvOS)
-    private var homeTopPadding: CGFloat { 0 }
-    private var connectTopGap: CGFloat { 8 }
-    private var cardsTopGap: CGFloat { 12 }
-    private var cardGap: CGFloat { 12 }
-    #else
     private var homeTopPadding: CGFloat { 12 }
     private var connectTopGap: CGFloat { 20 }
     private var cardsTopGap: CGFloat { 20 }
@@ -287,55 +166,23 @@ struct HomeView: View {
     #endif
 }
 
-#if os(tvOS)
-private struct TVAnnouncementSheet: View {
-    let text: String
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                BrandBackdrop()
-                List {
-                    Section {
-                        Button {} label: {
-                            Text(text)
-                                .font(.callout)
-                                .foregroundColor(.primary)
-                                .wraps()
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    Section {
-                        Button("Закрыть") { dismiss() }
-                    }
-                }
-                .tint(.primary)
-                .frame(maxWidth: 1040)
-                .padding(.vertical, 32)
-            }
-            .navigationTitle("Объявление")
-        }
-    }
-}
-#endif
-
-private struct StatusHeader: View {
+struct StatusHeader: View {
     var state: VPNController.State
+    /** Centered under the button on iOS; leading beside the hero button on Apple TV. */
+    var alignment: HorizontalAlignment = .center
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(alignment: alignment, spacing: 4) {
             Text(title)
                 #if os(tvOS)
-                .font(.title3.weight(.semibold))
+                .font(.title2.weight(.bold))
                 #else
                 .font(.title2.weight(.semibold))
                 #endif
             if case let .connected(since) = state {
                 Text(since, style: .timer)
                     #if os(tvOS)
-                    .font(.caption.monospacedDigit())
+                    .font(.callout.monospacedDigit().weight(.medium))
                     #else
                     .font(.subheadline.monospacedDigit())
                     #endif
@@ -343,7 +190,7 @@ private struct StatusHeader: View {
             } else {
                 Text(" ")
                     #if os(tvOS)
-                    .font(.caption)
+                    .font(.callout)
                     #else
                     .font(.subheadline)
                     #endif
@@ -361,10 +208,15 @@ private struct StatusHeader: View {
     }
 }
 
-private struct ConnectButton: View {
+struct ConnectButton: View {
     var state: VPNController.State
     var action: () -> Void
     @State private var pulse = false
+
+    init(state: VPNController.State, action: @escaping () -> Void) {
+        self.state = state
+        self.action = action
+    }
 
     private var connected: Bool {
         if case .connected = state { return true }
@@ -408,7 +260,7 @@ private struct ConnectButton: View {
                 .glassSurface(Circle(), tint: connected ? .accentColor : nil, interactive: true, fallback: .cardHigh)
                 .shadow(color: .black.opacity(connected ? 0.25 : 0), radius: 8, y: 4)
             }
-            .glassInteractiveButton(Circle(), scale: 1.07, ringOpacity: connected ? 0.8 : 0.55, liftHover: true)
+            .glassInteractiveButton(Circle(), scale: 1.07, ringOpacity: connected ? 0.9 : 0.85, liftHover: true)
             .disabled(state == .stopping)
             .animation(.easeInOut(duration: 0.3), value: connected)
         }
@@ -417,14 +269,15 @@ private struct ConnectButton: View {
     }
 
     #if os(tvOS)
-    private var buttonSize: CGFloat { 202 }
-    private var pulseSize: CGFloat { 238 }
-    private var containerSize: CGFloat { 244 }
-    private var iconSize: CGFloat { 52 }
-    private var labelSpacing: CGFloat { 6 }
-    private var labelFont: Font { .caption.weight(.semibold) }
-    private var busyScale: CGFloat { 1.4 }
-    private var busyOffset: CGFloat { 130 }
+    // 10-foot hero: large enough to read and target from the couch, with room for the focus lift.
+    private var buttonSize: CGFloat { 280 }
+    private var pulseSize: CGFloat { 330 }
+    private var containerSize: CGFloat { 344 }
+    private var iconSize: CGFloat { 76 }
+    private var labelSpacing: CGFloat { 10 }
+    private var labelFont: Font { .callout.weight(.semibold) }
+    private var busyScale: CGFloat { 1.6 }
+    private var busyOffset: CGFloat { 176 }
     #else
     private var buttonSize: CGFloat { 176 }
     private var pulseSize: CGFloat { 220 }
@@ -438,34 +291,42 @@ private struct ConnectButton: View {
 }
 
 /** Speed and the traffic of this connection, read from the tunnel once a second while visible. */
-private struct TrafficRow: View {
+struct TrafficRow: View {
     @EnvironmentObject private var vpn: VPNController
+    /** Centered on iOS; leading beside the hero button on Apple TV. */
+    var rowAlignment: HorizontalAlignment = .center
+
+    init(rowAlignment: HorizontalAlignment = .center) {
+        self.rowAlignment = rowAlignment
+    }
     @State private var stats: TunnelStats?
     @State private var speed = (up: Int64(0), down: Int64(0))
 
     var body: some View {
         Group {
             if vpn.isConnected {
-                VStack(spacing: 4) {
-                    HStack(spacing: 20) {
+                VStack(alignment: rowAlignment, spacing: 4) {
+                    HStack(spacing: 24) {
                         Label(Format.speed(speed.down), systemImage: "arrow.down")
                         Label(Format.speed(speed.up), systemImage: "arrow.up")
                     }
                     #if os(tvOS)
-                    .font(.caption.monospacedDigit())
+                    .font(.callout.monospacedDigit().weight(.medium))
+                    .foregroundColor(.primary)
                     #else
                     .font(.subheadline.monospacedDigit())
+                    .foregroundColor(.secondary)
                     #endif
                     if let stats {
                         Text("За сессию: ↓ \(Format.bytes(stats.down)) · ↑ \(Format.bytes(stats.up))")
                             #if os(tvOS)
-                            .font(.caption2.monospacedDigit())
+                            .font(.caption.monospacedDigit())
                             #else
                             .font(.caption)
                             #endif
+                            .foregroundColor(.secondary)
                     }
                 }
-                .foregroundColor(.secondary)
             }
         }
         .task(id: vpn.isConnected) {
@@ -491,7 +352,7 @@ private struct TrafficRow: View {
     }
 }
 
-private struct ServerCard: View {
+struct ServerCard: View {
     var server: ServerEntry?
     var ping: Ping?
     /** Opens the list; nil when the list is on screen anyway (wide windows): then it is just a card. */
@@ -499,27 +360,32 @@ private struct ServerCard: View {
 
     var body: some View {
         if let onTap {
+            let radius: CGFloat = Self.radius
             Button(action: onTap) {
                 content(chevron: true)
-                    .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .pointerHoverShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
+                    .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    .pointerHoverShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    #if os(tvOS)
+                    .cardSurface(RoundedRectangle(cornerRadius: radius, style: .continuous), color: .card)
+                    #else
+                    .glassSurface(RoundedRectangle(cornerRadius: radius, style: .continuous), interactive: true)
+                    #endif
             }
-            .glassInteractiveButton(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            #if os(tvOS)
+            .glassInteractiveButton(RoundedRectangle(cornerRadius: radius, style: .continuous), scale: 1.03, ringColor: .accentColor, ringOpacity: 0.9)
+            #else
+            .glassInteractiveButton(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            #endif
         } else {
             content(chevron: false).card()
         }
     }
 
     private func content(chevron: Bool) -> some View {
-        HStack {
+        HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Сервер")
-                    #if os(tvOS)
-                    .font(.caption2)
-                    #else
                     .font(.caption)
-                    #endif
                     .foregroundColor(.secondary)
                 if let server {
                     ServerTitle(server: server)
@@ -529,18 +395,35 @@ private struct ServerCard: View {
             }
             Spacer()
             PingLabel(ping: ping, kind: server?.kind)
-            if chevron { Image(systemName: "chevron.right").foregroundColor(.secondary) }
+            if chevron {
+                #if os(tvOS)
+                TVCardChevron()
+                #else
+                Image(systemName: "chevron.right").foregroundColor(.secondary)
+                #endif
+            }
         }
+        #if os(tvOS)
+        .padding(.horizontal, chevron ? 24 : 0)
+        .padding(.vertical, chevron ? 18 : 0)
+        #else
         .padding(chevron ? 16 : 0)
+        #endif
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    #if os(tvOS)
+    private static let radius: CGFloat = 26
+    #else
+    private static let radius: CGFloat = 24
+    #endif
 }
 
 /**
  * Plan, expiry and traffic; "Продлить" two days before the end, "Купить тариф" on the free plan — both only in
  * Russia (PurchaseRegion): elsewhere the App Store doesn't allow links to pay outside it. Never shown on tvOS.
  */
-private struct AccountCard: View {
+struct AccountCard: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -597,7 +480,7 @@ private struct AccountCard: View {
     #if os(tvOS)
     private var titleFont: Font { .callout.weight(.semibold) }
     private var detailFont: Font { .caption }
-    private var captionFont: Font { .caption2 }
+    private var captionFont: Font { .caption }
     #else
     private var titleFont: Font { .headline }
     private var detailFont: Font { .subheadline }

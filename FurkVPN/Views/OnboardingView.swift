@@ -19,6 +19,7 @@ struct OnboardingView: View {
         NavigationStack {
             content
                 .defaultFocus($focus, .pair)
+                .onAppear { focus = .pair }
                 .navigationDestination(isPresented: $showPairing) {
                     TVPairingView(title: "Подключить телевизор") { showPairing = false }
                 }
@@ -100,6 +101,7 @@ struct OnboardingView: View {
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .wraps()
+                        .padding(.horizontal, 12)
                     wideButton("Ввести ключ вручную", icon: "keyboard") {
                         pendingManualKey = nil
                         manual = true
@@ -149,7 +151,7 @@ struct OnboardingView: View {
     private var logoWidth: CGFloat { 210 }
     private var greetingSpacing: CGFloat { 16 }
     private var actionSpacing: CGFloat { 18 }
-    private var actionsMaxWidth: CGFloat { 680 }
+    private var actionsMaxWidth: CGFloat { 700 }
     private var outerPadding: CGFloat { 80 }
     private var buttonVerticalPadding: CGFloat { 6 }
     private var subtitleFont: Font { .callout }

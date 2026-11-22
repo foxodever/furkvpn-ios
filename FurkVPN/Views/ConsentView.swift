@@ -112,6 +112,7 @@ struct ConsentCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
         #if os(tvOS)
+        .defaultFocus($acceptFocused, true)
         .onAppear { acceptFocused = true }
         #endif
     }
@@ -208,6 +209,7 @@ struct ConsentDeclinedView: View {
             .frame(maxWidth: maxWidth)
         }
         #if os(tvOS)
+        .defaultFocus($reviewFocused, true)
         .onAppear { reviewFocused = true }
         #endif
     }

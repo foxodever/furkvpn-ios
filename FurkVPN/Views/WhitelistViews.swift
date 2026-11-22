@@ -53,6 +53,9 @@ struct WhitelistCard: View {
                     } else {
                         StatusDot(status: status, checking: model.whitelistChecking)
                     }
+                    #if os(tvOS)
+                    TVCardChevron()
+                    #endif
                 }
                 .foregroundColor(.primary)
                 .card()
@@ -114,12 +117,8 @@ private struct WhitelistSheet: View {
         let status = check?.status ?? .unknown
         #if os(tvOS)
         NavigationStack {
-            ZStack {
-                BrandBackdrop()
+            TVDetailLayout(icon: "checklist", caption: status.text, tint: status == .unknown ? .accentColor : status.color) {
                 list(check: check, status: status)
-                    .tint(.primary)
-                    .frame(maxWidth: 1120)
-                    .padding(.vertical, 32)
             }
             .navigationTitle("Белые списки")
             .toolbar {

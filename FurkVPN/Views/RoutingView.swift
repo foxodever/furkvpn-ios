@@ -43,12 +43,8 @@ struct RoutingView: View {
         #endif
 
         #if os(tvOS)
-        ZStack {
-            BrandBackdrop()
+        TVDetailLayout(icon: "arrow.triangle.branch", caption: "Свои правила важнее правил сервера: напрямую, через VPN или блокировать") {
             form
-                .tint(.primary)
-                .frame(maxWidth: 1120)
-                .padding(.top, 16)
         }
         #else
         form
@@ -170,8 +166,7 @@ private struct AddRulesSheet: View {
             ZStack {
                 BrandBackdrop()
                 VStack(alignment: .leading, spacing: 24) {
-                    Text("Добавить в «\(action.title)»")
-                        .font(.title3.weight(.semibold))
+                    TVSheetHeader(icon: "plus", title: "Добавить в «\(action.title)»")
                     Text("Укажите сайты или IP-адреса через запятую или пробел: youtube.com, .ru, 1.2.3.4, 10.0.0.0/8. Сайт включает все поддомены.")
                         .font(.callout)
                         .foregroundColor(.secondary)

@@ -17,11 +17,20 @@ struct CardBackground: ViewModifier {
     private static let radius: CGFloat = 24
     #endif
 
+    #if os(tvOS)
+    /** A row of cards on the Apple TV home tab: every card takes the row's full height. */
+    @Environment(\.tvCardFillsHeight) private var fillsHeight
+    #endif
+
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, Self.horizontalPadding)
             .padding(.vertical, Self.verticalPadding)
+            #if os(tvOS)
+            .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: fillsHeight ? .topLeading : .leading)
+            #else
             .frame(maxWidth: .infinity, alignment: .leading)
+            #endif
             .cardSurface(RoundedRectangle(cornerRadius: Self.radius, style: .continuous), color: color)
     }
 }
@@ -29,6 +38,32 @@ struct CardBackground: ViewModifier {
 extension View {
     func card(_ color: Color = .card) -> some View { modifier(CardBackground(color: color)) }
 }
+
+#if os(tvOS)
+private struct TVCardFillsHeightKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /** Cards stretch to the tallest card of their row (the Apple TV home tab's card row). */
+    var tvCardFillsHeight: Bool {
+        get { self[TVCardFillsHeightKey.self] }
+        set { self[TVCardFillsHeightKey.self] = newValue }
+    }
+}
+#endif
+
+#if os(tvOS)
+/** Trailing affordance of the main screen's focusable cards (white lists, announcement): static cards have none. */
+struct TVCardChevron: View {
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption.weight(.bold))
+            .foregroundColor(.secondary)
+            .accessibilityHidden(true)
+    }
+}
+#endif
 
 /**
  * Two halves side by side when the window is wide enough for both: the unfolded iPhone Duo (its inner
@@ -175,7 +210,7 @@ struct PingLabel: View {
         } else if let text = Format.ping(ping, kind: kind) {
             Text(text)
                 #if os(tvOS)
-                .font(.caption.monospacedDigit().weight(.medium))
+                .font(.subheadline.monospacedDigit().weight(.semibold))
                 #else
                 .font(.subheadline.monospacedDigit())
                 #endif
@@ -198,20 +233,22 @@ struct ServerTitle: View {
 
     var body: some View {
         #if os(tvOS)
-        HStack(spacing: 16) {
+        HStack(spacing: 14) {
             Text(server.flag ?? "🌐")
-                .font(.system(size: 38))
-                .frame(width: 48)
+                .font(.system(size: 36))
+                .frame(width: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text(server.title)
                     .font(.callout.weight(.medium))
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.82)
                 if let summary = server.summary {
                     Text(summary)
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
             }
         }
@@ -316,6 +353,27 @@ struct TelegramProxiesSheet: View {
 }
 #endif
 
+#if os(tvOS)
+/** Title row of the Apple TV form sheets (manual key, routing rules): a tinted glyph tile beside the title. */
+struct TVSheetHeader: View {
+    var icon: String
+    var title: String
+
+    var body: some View {
+        HStack(spacing: 22) {
+            Image(systemName: icon)
+                .font(.callout.weight(.semibold))
+                .foregroundColor(.onAccent)
+                .frame(width: 72, height: 72)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .wraps()
+        }
+    }
+}
+#endif
+
 /** Text field for a key typed or pasted by hand. */
 struct ManualKeySheet: View {
     var onAdd: (String) -> Void
@@ -332,8 +390,7 @@ struct ManualKeySheet: View {
             ZStack {
                 BrandBackdrop()
                 VStack(alignment: .leading, spacing: 26) {
-                    Text("Введите ключ FurkVPN")
-                        .font(.title3.weight(.semibold))
+                    TVSheetHeader(icon: "key.fill", title: "Введите ключ FurkVPN")
                     Text("Удобно вставить ссылку с iPhone через уведомление клавиатуры Apple TV.")
                         .font(.callout)
                         .foregroundColor(.secondary)

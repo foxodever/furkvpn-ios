@@ -26,10 +26,9 @@ struct ServersView: View {
         .sheetGlass()
     }
 }
-#endif
 
 /**
- * The server list next to the main screen on wide windows (iPad, Mac, the unfolded iPhone Duo, Apple TV),
+ * The server list next to the main screen on wide windows (iPad, Mac, the unfolded iPhone Duo),
  * like the Android app. It stands on the right; the swap button or Settings → Интерфейс moves it to the left.
  */
 struct ServersPane: View {
@@ -37,68 +36,29 @@ struct ServersPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: headerSpacing) {
+            HStack(spacing: 2) {
                 Text("Серверы").font(.title3.weight(.semibold))
                 Spacer()
-                headerActions
+                headerButton("Поменять местами", icon: "arrow.left.arrow.right") {
+                    withAnimation(.easeInOut(duration: 0.3)) { model.serversOnLeft.toggle() }
+                }
+                // Stays enabled while pinging: pressing it again starts over.
+                headerButton("Проверить пинг", icon: "bolt.horizontal.circle", busy: model.pinging) { model.testPings() }
+                headerButton("Обновить подписку", icon: "arrow.clockwise", busy: model.refreshing) {
+                    model.refreshSubscription(showMessage: true)
+                }
+                .disabled(model.refreshing)
             }
-            .padding(.leading, headerLeading)
-            .padding(.trailing, headerTrailing)
-            .padding(.top, headerTop)
-            .padding(.bottom, headerBottom)
-            #if os(tvOS)
-            .focusSection()
-            #endif
+            .padding(.leading, 20)
+            .padding(.trailing, 8)
+            .padding(.top, 10)
             ServerList(inPane: true) { model.select($0.key) }
         }
-        #if os(tvOS)
-        .cardSurface(RoundedRectangle(cornerRadius: paneRadius, style: .continuous), color: .card)
-        .clipShape(RoundedRectangle(cornerRadius: paneRadius, style: .continuous))
-        #else
-        .background(Color.card, in: RoundedRectangle(cornerRadius: paneRadius, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: paneRadius, style: .continuous))
-        #endif
-    }
-
-    @ViewBuilder
-    private var headerActions: some View {
-        let buttons = Group {
-            headerButton("Поменять местами", icon: "arrow.left.arrow.right") {
-                withAnimation(.easeInOut(duration: 0.3)) { model.serversOnLeft.toggle() }
-            }
-            // Stays enabled while pinging: pressing it again starts over.
-            headerButton("Проверить пинг", icon: "bolt.horizontal.circle", busy: model.pinging) { model.testPings() }
-            headerButton("Обновить подписку", icon: "arrow.clockwise", busy: model.refreshing) {
-                model.refreshSubscription(showMessage: true)
-            }
-            .disabled(model.refreshing)
-        }
-        #if os(tvOS)
-        GlassGroup(spacing: 8) {
-            HStack(spacing: 12) { buttons }
-        }
-        #else
-        buttons
-        #endif
+        .background(Color.card, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 
     private func headerButton(_ title: String, icon: String, busy: Bool = false, _ action: @escaping () -> Void) -> some View {
-        #if os(tvOS)
-        Button(action: action) {
-            ZStack {
-                if busy {
-                    ProgressView().scaleEffect(0.6)
-                } else {
-                    Image(systemName: icon).font(.callout.weight(.medium))
-                }
-            }
-            .foregroundColor(.primary)
-            .frame(width: 56, height: 56)
-            .glassSurface(Circle(), fallback: .cardHigh)
-        }
-        .glassInteractiveButton(Circle(), scale: 1.08)
-        .accessibilityLabel(title)
-        #else
         Button(action: action) {
             ZStack {
                 if busy { ProgressView() } else { Image(systemName: icon).font(.title3) }
@@ -110,33 +70,22 @@ struct ServersPane: View {
         .hoverEffect(.highlight)
         .accessibilityLabel(title)
         .help(title)
-        #endif
     }
-
-    #if os(tvOS)
-    private var paneRadius: CGFloat { 36 }
-    private var headerSpacing: CGFloat { 12 }
-    private var headerLeading: CGFloat { 32 }
-    private var headerTrailing: CGFloat { 28 }
-    private var headerTop: CGFloat { 24 }
-    private var headerBottom: CGFloat { 4 }
-    #else
-    private var paneRadius: CGFloat { 28 }
-    private var headerSpacing: CGFloat { 2 }
-    private var headerLeading: CGFloat { 20 }
-    private var headerTrailing: CGFloat { 8 }
-    private var headerTop: CGFloat { 10 }
-    private var headerBottom: CGFloat { 0 }
-    #endif
 }
+#endif
 
 /** Server list: sections from the subscription's separators, tabs by emoji, pings. */
 struct ServerList: View {
     @EnvironmentObject private var model: AppModel
     /** On the main screen's pane: the pane's color shows through, the rows a step lighter. */
     var inPane = false
+    /** Apple TV's Серверы tab: a full-canvas grid of focus cards with this many columns. */
+    var columns = 1
     var onPick: (ServerEntry) -> Void
     @State private var filter: String?
+    #if os(tvOS)
+    @FocusState private var focusedKey: String?
+    #endif
 
     private struct ServerSection: Identifiable {
         var id: String
@@ -176,38 +125,54 @@ struct ServerList: View {
 
     var body: some View {
         #if os(tvOS)
-        VStack(alignment: .leading, spacing: 0) {
+        tvGrid
+        #else
+        iosList
+        #endif
+    }
+
+    #if os(tvOS)
+    /**
+     * Full-canvas grid (Apple TV Серверы tab): filter pills that never clip, then the subscription's sections
+     * as rows of focus cards. The scroll views span the screen edge to edge and inset their content by the
+     * overscan margin, so a lifted card is never cut off by the scroll view's bounds.
+     */
+    private var tvGrid: some View {
+        let margin = TVLayout.horizontalMargin
+        let grid = Array(repeating: GridItem(.flexible(), spacing: 32, alignment: .top), count: max(columns, 1))
+        return VStack(alignment: .leading, spacing: 0) {
             if !filters.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    GlassGroup(spacing: 8) {
-                        HStack(spacing: 12) {
-                            chip("Все", selected: activeFilter == nil) { filter = nil }
-                            ForEach(filters, id: \.self) { f in
-                                chip("\(f.emoji) \(f.title)", selected: activeFilter == f.emoji) { filter = f.emoji }
-                            }
+                let pills = GlassGroup(spacing: 8) {
+                    HStack(spacing: 20) {
+                        chip("Все", selected: activeFilter == nil) { filter = nil }
+                        ForEach(filters, id: \.self) { f in
+                            chip("\(f.emoji) \(f.title)", selected: activeFilter == f.emoji) { filter = f.emoji }
                         }
                     }
-                    .padding(.leading, 32)
-                    .padding(.trailing, 56)
-                    .padding(.vertical, 14)
+                    .padding(.horizontal, margin)
+                    .padding(.vertical, 18)
                 }
-                .mask(horizontalFade)
+                // All the pills in one row when they fit (they do on a 1080p canvas); scrolls only if they don't.
+                ViewThatFits(in: .horizontal) {
+                    pills.frame(maxWidth: .infinity, alignment: .leading)
+                    ScrollView(.horizontal, showsIndicators: false) { pills }
+                }
                 .focusSection()
             }
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 20) {
                     ForEach(sections) { section in
-                        if let title = section.title, !title.isEmpty {
-                            Text(title)
-                                .font(.caption.weight(.medium))
-                                .foregroundColor(.secondary)
-                                .padding(.top, section.id == sections.first?.id ? 2 : 18)
-                                .padding(.bottom, 2)
-                                .padding(.horizontal, 8)
+                        Text(gridTitle(section))
+                            .font(.callout.weight(.semibold))
+                            .foregroundColor(.secondary)
+                            .padding(.top, section.id == sections.first?.id ? 4 : 28)
+                            .padding(.leading, 8)
+                        LazyVGrid(columns: grid, alignment: .leading, spacing: 32) {
+                            ForEach(section.servers) { server in
+                                tvTile(server)
+                            }
                         }
-                        ForEach(section.servers) { server in
-                            tvRow(server)
-                        }
+                        .focusSection()
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         if model.pingWhitelistOnly {
@@ -215,22 +180,65 @@ struct ServerList: View {
                         }
                         Text("Удерживайте кнопку выбора или нажмите Play/Pause на сервере, чтобы проверить только его")
                     }
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundColor(.secondary)
-                    .padding(.top, 14)
-                    .padding(.horizontal, 8)
+                    .padding(.top, 24)
+                    .padding(.leading, 8)
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-                .padding(.bottom, 36)
+                .padding(.horizontal, margin)
+                .padding(.top, 16)
+                .padding(.bottom, TVLayout.verticalMargin)
             }
-            .mask(verticalFade)
+            .defaultFocus($focusedKey, model.selectedServer?.key)
             .focusSection()
         }
         .task(id: model.subscription?.url) {
             if model.pingOnOpen, model.pings.isEmpty { model.testPings() }
         }
-        #else
+    }
+
+    /** The first block of a subscription has no separator above it: the auto choices, named for the grid. */
+    private func gridTitle(_ section: ServerSection) -> String {
+        if let title = section.title, !title.isEmpty { return title }
+        return section.servers.allSatisfy { $0.kind == .auto } ? "Автовыбор" : "Серверы"
+    }
+
+    /** A server as a 10-foot focus card: flag, name and protocol, the ping and the selection mark. */
+    private func tvTile(_ server: ServerEntry) -> some View {
+        let isSelected = server.key == model.selectedServer?.key
+        let shape = RoundedRectangle(cornerRadius: 28, style: .continuous)
+        return Button {
+            onPick(server)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                ServerTitle(server: server)
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 8) {
+                    PingLabel(ping: model.pings[server.key], kind: server.kind)
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.callout.weight(.semibold))
+                            .foregroundColor(.accentColor)
+                            .accessibilityLabel("Выбран")
+                    }
+                }
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
+            .frame(maxWidth: .infinity, minHeight: 116, alignment: .leading)
+            .cardSurface(shape, color: isSelected ? .cardHigh : .card)
+            .overlay(shape.strokeBorder(isSelected ? Color.accentColor.opacity(0.45) : .clear, lineWidth: 2))
+            .contentShape(shape)
+        }
+        .glassInteractiveButton(shape, scale: 1.045, ringColor: .accentColor, ringOpacity: 0.9)
+        .focused($focusedKey, equals: server.key)
+        .contextMenu {
+            Button { model.pingServer(server) } label: { Label("Проверить пинг", systemImage: "bolt.horizontal") }
+        }
+        .onPlayPauseCommand { model.pingServer(server) }
+    }
+    #else
+    private var iosList: some View {
         List {
             if !filters.isEmpty {
                 Section {
@@ -269,55 +277,8 @@ struct ServerList: View {
             // The first look at the list checks the servers, like the Android app (unless turned off in Settings).
             if model.pingOnOpen, model.pings.isEmpty { model.testPings() }
         }
-        #endif
     }
 
-    #if os(tvOS)
-    private func tvRow(_ server: ServerEntry) -> some View {
-        let isSelected = server.key == model.selectedServer?.key
-        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-        return Button {
-            onPick(server)
-        } label: {
-            HStack(spacing: 14) {
-                ServerTitle(server: server)
-                Spacer(minLength: 10)
-                PingLabel(ping: model.pings[server.key], kind: server.kind)
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.callout.weight(.semibold))
-                        .foregroundColor(.accentColor)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
-            .background(Color.paneRow, in: shape)
-            .overlay(shape.strokeBorder(isSelected ? Color.accentColor.opacity(0.45) : .clear, lineWidth: 2))
-        }
-        .glassInteractiveButton(shape, scale: 1.025, ringColor: .accentColor, ringOpacity: 0.9)
-        .contextMenu {
-            Button { model.pingServer(server) } label: { Label("Проверить пинг", systemImage: "bolt.horizontal") }
-        }
-        .onPlayPauseCommand { model.pingServer(server) }
-    }
-
-    private var horizontalFade: some View {
-        HStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 24)
-            Rectangle().fill(.black)
-            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 48)
-        }
-    }
-
-    private var verticalFade: some View {
-        VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 10)
-            Rectangle().fill(.black)
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 32)
-        }
-    }
-    #else
     private func row(_ server: ServerEntry) -> some View {
         Button {
             onPick(server)
@@ -342,9 +303,11 @@ struct ServerList: View {
         Button(action: onTap) {
             Text(title)
                 #if os(tvOS)
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
+                .font(.callout.weight(.semibold))
+                .padding(.horizontal, 30)
+                .padding(.vertical, 14)
+                .lineLimit(1)
+                .fixedSize()
                 #else
                 .font(.subheadline)
                 .padding(.horizontal, 12)
@@ -354,23 +317,18 @@ struct ServerList: View {
                 .contentShape(Capsule())
                 .glassSurface(Capsule(), tint: selected ? .accentColor : nil, interactive: true, fallback: .cardHigh)
         }
-        .glassInteractiveButton(Capsule(), scale: 1.06, ringOpacity: selected ? 0.85 : 0.55)
+        .glassInteractiveButton(Capsule(), scale: 1.06, ringOpacity: selected ? 0.9 : 0.85)
     }
 }
 
+#if !os(tvOS)
 private extension Color {
     /** Rows of the pane's list: lighter than the pane in both themes. */
     static let paneRow = Color(UIColor { traits in
-        #if os(tvOS)
-        UIColor(named: traits.userInterfaceStyle == .dark ? "CardHigh" : "Background")
-            ?? (traits.userInterfaceStyle == .dark ? .darkGray : .white)
-        #else
         UIColor(named: traits.userInterfaceStyle == .dark ? "CardHigh" : "Background") ?? .secondarySystemGroupedBackground
-        #endif
     })
 }
 
-#if !os(tvOS)
 private extension View {
     /**
      * insetGrouped leaves a big gap above the first section and between sections (the tabs under the title

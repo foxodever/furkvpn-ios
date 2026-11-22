@@ -203,13 +203,59 @@ private struct SheetGlass: ViewModifier {
 
 #if os(tvOS)
 /**
+ * The 10-foot focus treatment shared by every custom control on Apple TV: the focused control grows, its surface
+ * brightens, and a crisp ring stands just outside it with a gap of the backdrop between the two — so it reads on
+ * any fill (a dark idle circle, the light accent, a white card in light mode) — under a soft halo and a drop
+ * shadow that lift it off the screen.
+ */
+private struct TVFocusLift<S: InsettableShape>: ViewModifier {
+    var shape: S
+    var focused: Bool
+    var pressed: Bool
+    var scale: CGFloat
+    var ringColor: Color
+    var ringOpacity: Double
+    var shadowRadius: CGFloat
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+
+    static var ringWidth: CGFloat { 4 }
+    static var ringGap: CGFloat { 5 }
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                shape
+                    .fill(Color.white.opacity(focused ? (colorScheme == .dark ? 0.16 : 0.10) : 0))
+                    .blendMode(.plusLighter)
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                shape
+                    .inset(by: -(Self.ringGap + Self.ringWidth))
+                    .strokeBorder(ringColor.opacity(focused ? max(ringOpacity, 0.85) : 0), lineWidth: Self.ringWidth)
+                    .allowsHitTesting(false)
+            )
+            .opacity(isEnabled ? 1 : 0.45)
+            .scaleEffect(pressed ? scale * 0.96 : (focused ? scale : 1.0))
+            .shadow(color: ringColor.opacity(focused ? (colorScheme == .dark ? 0.32 : 0.18) : 0), radius: focused ? shadowRadius * 0.8 : 0)
+            .shadow(
+                color: .black.opacity(focused ? (colorScheme == .dark ? 0.45 : 0.22) : 0),
+                radius: focused ? shadowRadius : 0,
+                y: focused ? shadowRadius * 0.5 : 0
+            )
+            .animation(.easeOut(duration: 0.16), value: focused)
+            .animation(.easeOut(duration: 0.10), value: pressed)
+    }
+}
+
+/**
  * Action button style for tvOS matching iOS .glassProminent / .glass while preserving Color.onAccent contrast
  * against the light dark-mode AccentColor on tvOS 26+ Liquid Glass and earlier tvOS versions.
  */
 private struct TVGlassActionButtonStyle: ButtonStyle {
     var prominent: Bool
     @Environment(\.isFocused) private var isFocused
-    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = Capsule()
@@ -220,21 +266,15 @@ private struct TVGlassActionButtonStyle: ButtonStyle {
             .padding(.horizontal, 32)
             .padding(.vertical, 16)
             .glassSurface(shape, tint: tint, fallback: prominent ? .accentColor : .cardHigh)
-            .overlay(
-                shape.strokeBorder(
-                    isFocused ? Color.primary.opacity(prominent ? 0.85 : 0.65) : .clear,
-                    lineWidth: 3
-                )
-            )
-            .opacity(isEnabled ? 1 : 0.45)
-            .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.05 : 1.0))
-            .shadow(
-                color: .black.opacity(isFocused ? 0.34 : 0),
-                radius: isFocused ? 22 : 0,
-                y: isFocused ? 10 : 0
-            )
-            .animation(.easeOut(duration: 0.16), value: isFocused)
-            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+            .modifier(TVFocusLift(
+                shape: shape,
+                focused: isFocused,
+                pressed: configuration.isPressed,
+                scale: 1.05,
+                ringColor: .primary,
+                ringOpacity: 0.9,
+                shadowRadius: 24
+            ))
     }
 }
 
@@ -247,29 +287,67 @@ struct TVFocusButtonStyle<S: InsettableShape>: ButtonStyle {
     var shape: S
     var scale: CGFloat = 1.05
     var ringColor: Color = .primary
-    var ringOpacity: Double = 0.65
-    var ringWidth: CGFloat = 3
+    var ringOpacity: Double = 0.9
     var shadowRadius: CGFloat = 22
     @Environment(\.isFocused) private var isFocused
-    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .overlay(
-                shape.strokeBorder(
-                    isFocused ? ringColor.opacity(ringOpacity) : .clear,
-                    lineWidth: ringWidth
-                )
-            )
-            .opacity(isEnabled ? 1 : 0.45)
-            .scaleEffect(configuration.isPressed ? 0.96 : (isFocused ? scale : 1.0))
-            .shadow(
-                color: .black.opacity(isFocused ? 0.32 : 0),
-                radius: isFocused ? shadowRadius : 0,
-                y: isFocused ? shadowRadius * 0.45 : 0
-            )
-            .animation(.easeOut(duration: 0.16), value: isFocused)
-            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+            .modifier(TVFocusLift(
+                shape: shape,
+                focused: isFocused,
+                pressed: configuration.isPressed,
+                scale: scale,
+                ringColor: ringColor,
+                ringOpacity: ringOpacity,
+                shadowRadius: shadowRadius
+            ))
+    }
+}
+
+/**
+ * Native tvOS detail layout for Settings, Routing, Diagnostics and the white lists: a large brand glyph with a
+ * short description on the leading side (like the system Settings app) beside the shared Form / List, which
+ * keeps the 10-foot row width instead of floating alone in the middle of the screen.
+ */
+struct TVDetailLayout<Content: View>: View {
+    var icon: String
+    var caption: String
+    var tint: Color = .accentColor
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ZStack {
+            BrandBackdrop()
+            HStack(alignment: .center, spacing: 72) {
+                VStack(spacing: 30) {
+                    Image(systemName: icon)
+                        .font(.system(size: 120, weight: .regular))
+                        .foregroundColor(tint)
+                        .frame(width: 280, height: 280)
+                        .glassSurface(RoundedRectangle(cornerRadius: 64, style: .continuous), fallback: .cardHigh)
+                        .shadow(color: .black.opacity(0.22), radius: 28, y: 14)
+                    Image("Logo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 64)
+                        .foregroundColor(.primary)
+                    Text(caption)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .wraps()
+                }
+                .frame(width: 520)
+                .accessibilityElement(children: .combine)
+                content
+                    .tint(.primary)
+                    .frame(maxWidth: 1100, maxHeight: .infinity)
+                    .focusSection()
+            }
+            .padding(.top, 12)
+            .frame(maxWidth: WideLayout.maxWidth)
+        }
     }
 }
 #endif
