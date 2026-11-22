@@ -6,7 +6,7 @@ struct RoutingView: View {
     @State private var adding: RouteAction?
 
     var body: some View {
-        Form {
+        let form = Form {
             Section(footer: Text("Они важнее правил сервера")) {
                 Toggle("Использовать свои правила", isOn: $model.routing.enabled)
             }
@@ -31,10 +31,28 @@ struct RoutingView: View {
             }
         }
         .navigationTitle("Маршрутизация")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationBar()
+        #if os(tvOS)
+        .fullScreenCover(item: $adding) { action in
+            AddRulesSheet(action: action).environmentObject(model)
+        }
+        #else
         .sheet(item: $adding) { action in
             AddRulesSheet(action: action).environmentObject(model)
         }
+        #endif
+
+        #if os(tvOS)
+        ZStack {
+            BrandBackdrop()
+            form
+                .tint(.primary)
+                .frame(maxWidth: 1120)
+                .padding(.top, 16)
+        }
+        #else
+        form
+        #endif
     }
 }
 
@@ -44,14 +62,40 @@ private struct RuleSection: View {
     var onAdd: () -> Void
     @State private var showAll = false
     @State private var confirmClear = false
+    #if os(tvOS)
+    @State private var ruleToDelete: String?
+    #endif
 
     var body: some View {
         let entries = model.routing.rules(action)
         let visible = showAll ? entries : Array(entries.prefix(5))
-        Section(header: Text(action.title), footer: Text(action.hint)) {
+        let section = Section(header: Text(action.title), footer: Text(action.hint)) {
             if entries.isEmpty {
                 Text("Пока пусто").foregroundColor(.secondary)
             }
+            #if os(tvOS)
+            ForEach(visible, id: \.self) { entry in
+                Button {
+                    ruleToDelete = entry
+                } label: {
+                    HStack {
+                        Text(Core.routeDisplay(entry))
+                        Spacer()
+                        if let kind = kindLabel(entry) {
+                            Text(kind).font(.caption).foregroundColor(.secondary)
+                        }
+                        Image(systemName: "trash").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        model.removeRoutingRule(entry, from: action)
+                    } label: {
+                        Label("Удалить", systemImage: "trash")
+                    }
+                }
+            }
+            #else
             ForEach(visible, id: \.self) { entry in
                 HStack {
                     Text(Core.routeDisplay(entry))
@@ -64,6 +108,7 @@ private struct RuleSection: View {
             .onDelete { offsets in
                 offsets.map { visible[$0] }.forEach { model.removeRoutingRule($0, from: action) }
             }
+            #endif
             if entries.count > 5 {
                 Button(showAll ? "Свернуть" : "Показать все · \(entries.count)") { showAll.toggle() }
             }
@@ -72,12 +117,32 @@ private struct RuleSection: View {
                 Button("Удалить все", role: .destructive) { confirmClear = true }
             }
         }
-        .confirmationDialog("Очистить список «\(action.title)»?", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("Удалить все", role: .destructive) { model.clearRoutingRules(action) }
-            Button("Отмена", role: .cancel) {}
-        } message: {
-            Text("Будут удалены все записи: \(entries.count).")
-        }
+        #if os(tvOS)
+        section
+            .alert("Удалить правило?", isPresented: Binding(get: { ruleToDelete != nil }, set: { if !$0 { ruleToDelete = nil } }), presenting: ruleToDelete) { entry in
+                Button("Удалить", role: .destructive) {
+                    model.removeRoutingRule(entry, from: action)
+                    ruleToDelete = nil
+                }
+                Button("Отмена", role: .cancel) { ruleToDelete = nil }
+            } message: { entry in
+                Text("Правило «\(Core.routeDisplay(entry))» будет удалено из списка «\(action.title)».")
+            }
+            .alert("Очистить список «\(action.title)»?", isPresented: $confirmClear) {
+                Button("Удалить все", role: .destructive) { model.clearRoutingRules(action) }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Будут удалены все записи: \(entries.count).")
+            }
+        #else
+        section
+            .confirmationDialog("Очистить список «\(action.title)»?", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("Удалить все", role: .destructive) { model.clearRoutingRules(action) }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Будут удалены все записи: \(entries.count).")
+            }
+        #endif
     }
 
     private func kindLabel(_ entry: String) -> String? {
@@ -95,7 +160,61 @@ private struct AddRulesSheet: View {
     @State private var text = ""
     @State private var invalid: [String] = []
 
+    private var canAdd: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
+        #if os(tvOS)
+        NavigationStack {
+            ZStack {
+                BrandBackdrop()
+                VStack(alignment: .leading, spacing: 24) {
+                    Text("Добавить в «\(action.title)»")
+                        .font(.title3.weight(.semibold))
+                    Text("Укажите сайты или IP-адреса через запятую или пробел: youtube.com, .ru, 1.2.3.4, 10.0.0.0/8. Сайт включает все поддомены.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .wraps()
+                    TextField("youtube.com, .ru, 1.2.3.4", text: $text)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                        .onSubmit {
+                            if canAdd { add() }
+                        }
+                    GlassGroup(spacing: 10) {
+                        HStack(spacing: 14) {
+                            prefixButton("+ слово", "keyword:")
+                            prefixButton("+ точно", "full:")
+                            prefixButton("+ regexp", "regexp:")
+                        }
+                    }
+                    if !invalid.isEmpty {
+                        Text("Не распознано: \(invalid.joined(separator: ", "))")
+                            .font(.callout)
+                            .foregroundColor(.red)
+                            .wraps()
+                    }
+                    GlassGroup(spacing: 12) {
+                        HStack(spacing: 20) {
+                            Spacer()
+                            Button("Отмена") { dismiss() }
+                                .glassButtonStyle()
+                            Button("Добавить") { add() }
+                                .glassButtonStyle(prominent: true)
+                                .disabled(!canAdd)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .padding(44)
+                .cardSurface(RoundedRectangle(cornerRadius: 36, style: .continuous), color: .card)
+                .frame(maxWidth: 1040)
+                .padding(60)
+            }
+        }
+        #else
         NavigationView {
             Form {
                 Section(header: Text("Сайты или IP-адреса"),
@@ -121,19 +240,29 @@ private struct AddRulesSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .barItem(.cancellationAction) { Button("Отмена") { dismiss() } }
             .barItem(.confirmationAction) {
-                Button("Добавить") { add() }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Добавить") { add() }.disabled(!canAdd)
             }
         }
         .sheetGlass()
+        #endif
     }
 
     private func prefixButton(_ title: String, _ prefix: String) -> some View {
         Button(title) {
+            #if os(tvOS)
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty, let last = text.last, !",; \t".contains(last) { text += ", " }
+            #else
             if let last = text.last, !"\n ,;\t".contains(last) { text += "\n" }
+            #endif
             text += prefix
         }
+        #if os(tvOS)
+        .glassButtonStyle()
+        #else
         .buttonStyle(.bordered)
         .font(.caption)
+        #endif
     }
 
     private func add() {
@@ -143,7 +272,11 @@ private struct AddRulesSheet: View {
             dismiss()
         } else {
             invalid = rejected
+            #if os(tvOS)
+            text = rejected.joined(separator: ", ")
+            #else
             text = rejected.joined(separator: "\n")
+            #endif
         }
     }
 }

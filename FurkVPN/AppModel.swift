@@ -213,11 +213,7 @@ final class AppModel: ObservableObject {
             pings = Demo.pings
             selectedKey = Demo.subscription.servers.first?.key
             serversOnLeft = Demo.serversLeft
-            #if os(tvOS)
-            Store.defaults.set(Demo.glass, forKey: TVGlassStyle.key)
-            #else
             Store.defaults.set(Demo.glass, forKey: GlassStyle.key)
-            #endif
             // No scroll bars on the screenshots (a Mac with a mouse shows them all the time).
             UIScrollView.appearance().showsVerticalScrollIndicator = false
             UIScrollView.appearance().showsHorizontalScrollIndicator = false

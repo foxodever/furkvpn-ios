@@ -36,7 +36,8 @@ targets:
       - FurkVPN/Platform.swift
       - FurkVPN/SignatureReport.swift
       - FurkVPN/VPNController.swift
-      - FurkVPN/Views/ConsentView.swift
+      - path: FurkVPN/Views
+        excludes: ["ScannerView.swift"]
       - FurkVPN/PrivacyInfo.xcprivacy
     settings:
       base:
