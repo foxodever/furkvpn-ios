@@ -116,6 +116,7 @@ enum Store {
         // The next key's servers are moved for white lists from scratch.
         whitelistCheck = nil
         whitelistAutoSwitched = nil
+        whitelistPrevious = nil
         return removedLegacy && removedGen && removedAccount
     }
 
@@ -252,6 +253,24 @@ enum Store {
     static var whitelistAutoSwitched: String? {
         get { defaults.string(forKey: "whitelistAutoSwitched") }
         set { defaults.set(newValue, forKey: "whitelistAutoSwitched") }
+    }
+
+    /** The server chosen before a white list check moved it: where to go back to once white lists are off. */
+    static var whitelistPrevious: String? {
+        get { defaults.string(forKey: "whitelistPrevious") }
+        set { defaults.set(newValue, forKey: "whitelistPrevious") }
+    }
+
+    /**
+     * A server picked by hand (the list, Shortcuts): it is the user's from now on, and white lists going off
+     * don't move it "back" — what the app remembered of its own move is forgotten. (Left as it was, a server
+     * the app once moved to and the user later picked himself went to auto-select on every "nothing works →
+     * everything works", which a Mac waking up goes through each time.)
+     */
+    static func selectByHand(_ key: String?) {
+        selectedServer = key
+        whitelistAutoSwitched = nil
+        whitelistPrevious = nil
     }
 
     /** The latest white list check, by the app or the extension. */

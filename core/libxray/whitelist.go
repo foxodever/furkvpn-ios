@@ -59,6 +59,8 @@ const (
 	whitelistAllOK      = "ALL_OK"
 	whitelistOn         = "WHITELIST"
 	whitelistNoInternet = "NO_INTERNET"
+	// The check could not tell: the sites it needed were not asked at all (no address to ask them at).
+	whitelistUnknown = "UNKNOWN"
 )
 
 // WhitelistHosts lists the host names of the check's sites ("www.google.com,vk.ru"): the tunnel
@@ -84,6 +86,8 @@ type probeResult struct {
 	Host  string `json:"host"`
 	Ms    *int64 `json:"ms,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Not asked: pinnedOnly and no address for the host. Says nothing about the operator.
+	skipped bool
 }
 
 const (
@@ -95,8 +99,11 @@ const (
 // site is reachable) and tells what that means. addressesJSON ({host: address}) gives the addresses to
 // connect to; with pinnedOnly, a host without one fails instead of being looked up (the lookup would go
 // through the VPN). iface binds the connections to the phone's own interface ("" — no binding).
-// JSON {"status": "ALL_OK"/"WHITELIST"/"NO_INTERNET", "blocked": [...], "allowed": [...]}, each
-// {"url", "host", "ms"} or {"url", "host", "error": "TIMEOUT"/"DNS"/"CONNECT"/"TLS"/"OTHER"}.
+// JSON {"status": "ALL_OK"/"WHITELIST"/"NO_INTERNET"/"UNKNOWN", "blocked": [...], "allowed": [...]}, each
+// {"url", "host", "ms"} or {"url", "host", "error": "TIMEOUT"/"DNS"/"CONNECT"/"TLS"/"OTHER"}. "UNKNOWN":
+// the sites of one kind were not asked at all (pinnedOnly and no addresses for them) — when the lookup of
+// Google's names failed before the tunnel and VK's did not, every check used to say "white lists" and move
+// the server.
 func WhitelistCheck(configJSON string, addressesJSON string, pinnedOnly bool, iface string) string {
 	c := parseWhitelistConfig(configJSON)
 	var given map[string]string
@@ -134,20 +141,36 @@ func WhitelistCheck(configJSON string, addressesJSON string, pinnedOnly bool, if
 		Status  string        `json:"status"`
 		Blocked []probeResult `json:"blocked"`
 		Allowed []probeResult `json:"allowed"`
-	}{whitelistStatus(anyOK(blocked), anyOK(allowed)), blocked, allowed}
+	}{whitelistStatus(blocked, allowed), blocked, allowed}
 	b, _ := json.Marshal(answer)
 	return string(b)
 }
 
-func whitelistStatus(blockedOK, allowedOK bool) string {
+// whitelistStatus: a site that white lists close answering means there are none; none of them answering
+// while an open one does means white lists; nothing answering, no internet. Sites that were not asked are
+// no evidence: with none of a kind asked, the check can't tell.
+func whitelistStatus(blocked, allowed []probeResult) string {
 	switch {
-	case blockedOK:
+	case anyOK(blocked):
 		return whitelistAllOK
-	case allowedOK:
+	case !anyAsked(blocked):
+		return whitelistUnknown
+	case anyOK(allowed):
 		return whitelistOn
+	case !anyAsked(allowed):
+		return whitelistUnknown
 	default:
 		return whitelistNoInternet
 	}
+}
+
+func anyAsked(results []probeResult) bool {
+	for _, r := range results {
+		if !r.skipped {
+			return true
+		}
+	}
+	return false
 }
 
 func anyOK(results []probeResult) bool {
@@ -210,6 +233,7 @@ func probe(client *http.Client, raw string) probeResult {
 	resp, err := client.Do(req)
 	if err != nil {
 		result.Error = probeError(err)
+		result.skipped = strings.Contains(err.Error(), errNoAddress.Error())
 		return result
 	}
 	resp.Body.Close()
@@ -278,10 +302,12 @@ func nameHasAny(remarks string, words []string) bool {
 
 // WhitelistTarget is the server (its key) to switch to when the check's status changes from old to
 // now, or "" to keep current. White lists on: the LTE server, unless a bypass or LTE server is already
-// chosen. White lists off: back to the Wi-Fi server, only from a bypass server or from the server the
-// app itself chose earlier (autoSwitched); one the user picked by hand stays. serversJSON: the
-// selectable servers, [{"key", "remarks", "kind"}].
-func WhitelistTarget(old string, now string, current string, serversJSON string, configJSON string, autoSwitched string) string {
+// chosen. White lists off: back, only from a bypass server or from the server the app itself chose
+// earlier (autoSwitched); one the user picked by hand stays. Back is the server that was chosen before
+// the app moved it (previous), when the subscription still has it — otherwise the Wi-Fi server: a
+// hand-picked country used to come back as auto-select. serversJSON: the selectable servers,
+// [{"key", "remarks", "kind"}].
+func WhitelistTarget(old string, now string, current string, serversJSON string, configJSON string, autoSwitched string, previous string) string {
 	c := parseWhitelistConfig(configJSON)
 	var servers []whitelistServer
 	_ = json.Unmarshal([]byte(serversJSON), &servers)
@@ -312,7 +338,14 @@ func WhitelistTarget(old string, now string, current string, serversJSON string,
 	case now == whitelistAllOK && old != whitelistAllOK:
 		fromBypass := old == whitelistOn && nameHasAny(cur.Remarks, c.BypassServer)
 		if cur.Key == autoSwitched || fromBypass {
-			if target := first(c.WifiServer); target != cur.Key {
+			target := first(c.WifiServer)
+			for _, s := range servers {
+				if previous != "" && previous != cur.Key && s.Key == previous && s.Kind != "SEPARATOR" {
+					target = previous
+					break
+				}
+			}
+			if target != cur.Key {
 				return target
 			}
 		}

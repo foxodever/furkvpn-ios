@@ -337,6 +337,8 @@ final class AppModel: ObservableObject {
         lastResume = Date()
         let coldStart = !resumedBefore
         resumedBefore = true
+        // The VPN may have gone down while the app was not running (a Mac asleep), without a word to it.
+        vpn.resync()
         syncShared()
         if Date().timeIntervalSince(whitelistCheck?.time ?? .distantPast) > 60 { checkWhitelist() }
         Task {
@@ -497,6 +499,7 @@ final class AppModel: ObservableObject {
         // and "on already" never moves one.
         Store.whitelistCheck = nil
         Store.whitelistAutoSwitched = nil
+        Store.whitelistPrevious = nil
         whitelistCheck = nil
         show("Ключ добавлен")
         // Model-owned follow-up: survives view teardown when onboarding switches to the dashboard.
@@ -675,12 +678,16 @@ final class AppModel: ObservableObject {
     // MARK: White lists
 
     private var whitelistRun = 0
+    private var whitelistRetryTask: Task<Void, Never>?
 
     private func cancelWhitelistCheck() {
         whitelistRun += 1
         pendingWhitelistCheck = false
         whitelistTask?.cancel()
         whitelistTask = nil
+        whitelistRetryTask?.cancel()
+        whitelistRetryTask = nil
+        whitelistRetries = 0
         whitelistChecking = false
     }
 
@@ -698,6 +705,8 @@ final class AppModel: ObservableObject {
         if Demo.on { return }
         #endif
         pendingWhitelistCheck = false
+        whitelistRetryTask?.cancel()
+        whitelistRetryTask = nil
         whitelistRun += 1
         let run = whitelistRun
         let generation = subscriptionGeneration
@@ -739,7 +748,10 @@ final class AppModel: ObservableObject {
                 let transition = vpnTransitionCount
                 let config = self.config.whitelist
                 let network = PhysicalNetwork.shared.kind
-                var check = await Task.detached(priority: .userInitiated) { Whitelist.check(config, network: network) }.value
+                // White lists just found are asked about once more before the server is moved.
+                var check = await Task.detached(priority: .userInitiated) {
+                    Whitelist.confirmed(Whitelist.check(config, network: network)) { Whitelist.check(config, network: network) }
+                }.value
                 // Recheck consent, setting, and subscription generation after the detached probe.
                 guard !Task.isCancelled, run == self.whitelistRun, consent == .given, whitelistDetect, generation == self.subscriptionGeneration else { return }
                 guard transition == vpnTransitionCount, vpn.state == .idle else {
@@ -759,12 +771,28 @@ final class AppModel: ObservableObject {
                     Task { [weak self] in await self?.vpn.syncStoredPayload() }
                 }
                 whitelistCheck = check
+                // "Nothing works" a moment after a new network or a wake-up is often just too early: asked again
+                // soon, not left on the card until the app is opened next.
+                if check.status == .noInternet, whitelistRetries < 2 {
+                    whitelistRetries += 1
+                    whitelistRetryTask?.cancel()
+                    whitelistRetryTask = Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: 10_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        self?.checkWhitelist()
+                    }
+                } else if check.status != .noInternet {
+                    whitelistRetries = 0
+                }
             } else {
                 // Tunnel is connecting or stopping: re-run once it settles to .connected or .idle.
                 pendingWhitelistCheck = true
             }
         }
     }
+
+    /** Checks made again in a row after "nothing works". */
+    private var whitelistRetries = 0
 
     private var networkTask: Task<Void, Never>?
 
@@ -819,9 +847,10 @@ final class AppModel: ObservableObject {
 
     // MARK: Servers
 
+    /** A server picked by hand: white lists going off leave it where it is (Store.selectByHand). */
     func select(_ key: String?, reconnect: Bool = true) {
         selectedKey = key
-        Store.selectedServer = key
+        Store.selectByHand(key)
         if reconnect {
             if vpn.isActive {
                 Task { await vpn.reload() }

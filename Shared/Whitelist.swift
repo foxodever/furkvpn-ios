@@ -102,12 +102,14 @@ enum Whitelist {
 
     /**
      * Which server to switch to when the status changes from [old] to [new], or nil to keep [current].
-     * White lists on: the LTE server unless a bypass or LTE one is chosen; off: back to the Wi-Fi server, only
-     * from a bypass server or from the one the app itself chose ([autoSwitched]) — a hand-picked one stays.
+     * White lists on: the LTE server unless a bypass or LTE one is chosen; off: back, only from a bypass server
+     * or from the one the app itself chose ([autoSwitched]) — a hand-picked one stays. Back is [previous], the
+     * server chosen before the app moved it, or the Wi-Fi server when the subscription no longer has it.
      */
     static func target(old: WhitelistStatus, new: WhitelistStatus, current: String, servers: [ServerEntry],
-                       config: WhitelistConfig, autoSwitched: String?) -> ServerEntry? {
-        let key = LibxrayWhitelistTarget(old.rawValue, new.rawValue, current, serversJSON(servers), config.json, autoSwitched ?? "")
+                       config: WhitelistConfig, autoSwitched: String?, previous: String?) -> ServerEntry? {
+        let key = LibxrayWhitelistTarget(old.rawValue, new.rawValue, current, serversJSON(servers), config.json,
+                                         autoSwitched ?? "", previous ?? "")
         return key.isEmpty ? nil : servers.first { $0.key == key }
     }
 
@@ -144,10 +146,25 @@ enum Whitelist {
         return "other"
     }
 
+    /** Between a check that found white lists and the one that confirms it. */
+    private static let confirmAfter: TimeInterval = 4
+
+    /**
+     * A check that says white lists have just come on is made once more a few seconds later, and that one
+     * counts: a single check with Google slow to answer (a network just joined, a Mac waking up) used to move
+     * the server. Blocks for the pause and the second check.
+     */
+    static func confirmed(_ first: WhitelistCheck, again: () -> WhitelistCheck) -> WhitelistCheck {
+        guard first.status == .whitelist, (Store.whitelistCheck?.status ?? .unknown) != .whitelist else { return first }
+        Thread.sleep(forTimeInterval: confirmAfter)
+        return again()
+    }
+
     /**
      * Applies a finished check to the shared settings: remembers it, and moves the selected server when the
-     * status changed (the app's own choice is remembered, so it is moved back later). Returns the server it
-     * switched to. Called by whichever process checked: the app without the VPN, the extension with it.
+     * status changed (the server it was moved from and the app's own choice are remembered, so it is moved back
+     * later). Returns the server it switched to. Called by whichever process checked: the app without the VPN,
+     * the extension with it.
      */
     static func apply(_ check: inout WhitelistCheck) -> ServerEntry? {
         let old = Store.whitelistCheck?.status ?? .unknown
@@ -155,11 +172,17 @@ enum Whitelist {
         if let info = Store.loadSubscription(), let current = Store.selectedEntry(in: info) {
             target = Self.target(old: old, new: check.status, current: current.key, servers: info.selectable,
                                  config: Store.loadRemoteConfig()?.whitelist ?? WhitelistConfig(),
-                                 autoSwitched: Store.whitelistAutoSwitched)
-            if check.status == .allOk, old != .allOk, target != nil { Store.whitelistAutoSwitched = nil }
+                                 autoSwitched: Store.whitelistAutoSwitched, previous: Store.whitelistPrevious)
+            if check.status == .allOk, old != .allOk, target != nil {
+                Store.whitelistAutoSwitched = nil
+                Store.whitelistPrevious = nil
+            }
             if let target {
                 Store.selectedServer = target.key
-                if check.status == .whitelist { Store.whitelistAutoSwitched = target.key }
+                if check.status == .whitelist {
+                    Store.whitelistAutoSwitched = target.key
+                    Store.whitelistPrevious = current.key
+                }
                 check.switchedTo = target.displayName
             }
         }

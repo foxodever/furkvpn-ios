@@ -7,6 +7,7 @@ struct HomeView: View {
     #if !os(tvOS)
     @State private var showSupport = false
     @State private var showProxies = false
+    @State private var showWhitelist = false
     #endif
     /** The list stands next to the main screen: no sheet for it, and Settings can move it to the other side. */
     @State private var wide = false
@@ -61,6 +62,9 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showProxies) {
             TelegramProxiesSheet(proxies: model.config.telegramProxies)
+        }
+        .sheet(isPresented: $showWhitelist) {
+            WhitelistSheet().environmentObject(model).environmentObject(vpn)
         }
         #endif
     }
@@ -123,7 +127,9 @@ struct HomeView: View {
     private var cards: some View {
         VStack(spacing: 0) {
             ServerCard(server: model.selectedServer, ping: model.selectedServer.flatMap { model.pings[$0.key] }, onTap: openServers)
-            WhitelistCard()
+                // A tap on it is its own whatever the cards below take as theirs.
+                .zIndex(1)
+            WhitelistCard { showWhitelist = true }
                 .padding(.top, cardGap)
             AccountCard()
                 .padding(.top, cardGap)

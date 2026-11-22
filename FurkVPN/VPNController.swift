@@ -198,6 +198,13 @@ final class VPNController: ObservableObject {
         stopTunnel(clearReconnect: false)
     }
 
+    /** The status as iOS has it now: a change may have passed while the app was not running (a Mac asleep). */
+    func resync() {
+        // Not in the middle of a connect or logout: iOS has not heard of it yet, and the screen would fall back to "off".
+        guard !starting, !clearing, Date().timeIntervalSince(startedAt) > 15 else { return }
+        if let connection = manager?.connection { update(connection) }
+    }
+
     private func update(_ connection: NEVPNConnection) {
         guard connection === manager?.connection else { return }
         let previous = state
@@ -346,6 +353,10 @@ final class VPNController: ObservableObject {
         await task.value
     }
 
+    /**
+     * The user's own stop: nothing brings the VPN back after it. A reconnect waiting for the tunnel to go down
+     * (a reload the extension didn't answer) used to start it again right after "Отключиться".
+     */
     func disconnect() {
         stopTunnel(clearReconnect: true)
     }
@@ -370,6 +381,9 @@ final class VPNController: ObservableObject {
             }
             guard epoch == self.startEpoch else { return }
             manager.connection.stopVPNTunnel()
+            // The tunnel may be down already and the app not told (a Mac that slept through it): the screen
+            // said "connected" with nothing left to stop. What iOS says now is what the screen shows.
+            update(manager.connection)
         }
     }
 

@@ -53,6 +53,7 @@ private struct TVHomeTab: View {
     @Binding var tab: TVTab
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vpn: VPNController
+    @State private var showWhitelist = false
     @State private var showAnnouncement = false
     @FocusState private var focus: Focus?
 
@@ -76,6 +77,9 @@ private struct TVHomeTab: View {
         .defaultFocus($focus, .connect)
         .onAppear {
             if focus == nil { focus = .connect }
+        }
+        .fullScreenCover(isPresented: $showWhitelist) {
+            WhitelistSheet().environmentObject(model).environmentObject(vpn)
         }
         .fullScreenCover(isPresented: $showAnnouncement) {
             if let announcement {
@@ -109,7 +113,7 @@ private struct TVHomeTab: View {
     private var cardsRow: some View {
         HStack(alignment: .top, spacing: 40) {
             if model.whitelistDetect {
-                WhitelistCard().frame(maxWidth: .infinity)
+                WhitelistCard { showWhitelist = true }.frame(maxWidth: .infinity)
             }
             AccountCard().frame(maxWidth: .infinity)
             if let announcement {
