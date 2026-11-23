@@ -57,7 +57,10 @@ workflows:
             echo "$hash" > Frameworks/core.hash
           fi
       - name: The app
-        script: ./build.sh 2>&1 | tee build.log
+        script: |
+          # A failed build stops the run here: the steps after it would only repeat the same errors.
+          set -o pipefail
+          ./build.sh 2>&1 | tee build.log
       - name: The Mac app
         script: |
           case "$FURK_RUN" in *" mac "*) ./build-mac.sh 2>&1 | tee build-mac.log || echo "The Mac app failed" ;; *) echo "No [mac]" ;; esac

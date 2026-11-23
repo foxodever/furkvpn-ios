@@ -147,10 +147,8 @@ final class AppModel: ObservableObject {
 
     init() {
         config = Store.loadRemoteConfig()?.sanitized() ?? RemoteConfig()
-        AppApi.host = config.site.apiDomain
         subscription = Store.loadSubscription()
         account = Store.loadAccount()
-        offer = subscription == nil ? nil : Self.loadOffer()
         selectedKey = Store.selectedServer
         routing = Store.routing
         subscriptionUpdateHours = Store.subscriptionUpdateHours
@@ -162,6 +160,9 @@ final class AppModel: ObservableObject {
         autoReconnect = Store.autoReconnect
         pushThroughVPN = Store.pushThroughVPN
         consent = Store.consentVersion >= Store.consentCurrent ? .given : Store.consentDeclined ? .declined : .ask
+        // Every stored property has its value by now: the rest may read them.
+        AppApi.host = config.site.apiDomain
+        offer = subscription == nil ? nil : Self.loadOffer()
         vpn.onError = { [weak self] message in self?.show("Ошибка подключения: \(message)") }
         _ = PhysicalNetwork.shared // starts watching the network before the first ping
         // Operators turn white lists on for mobile data: a new network is worth a check.
