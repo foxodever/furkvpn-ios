@@ -1,11 +1,16 @@
 import SwiftUI
 import UIKit
 
-/** Welcome screen: a FurkVPN key from the clipboard, a QR code, the bot, the site or typed by hand. */
+/**
+ * Welcome screen: a FurkVPN key from the clipboard, a QR code, the bot, a sign-in (the site, an email, Apple),
+ * a plan bought in the App Store, or a key typed by hand.
+ */
 struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
     @State private var manual = false
     @State private var scanning = false
+    @State private var signingIn = false
+    @State private var subscribing = false
 
     var body: some View {
         GeometryReader { geo in
@@ -21,23 +26,34 @@ struct OnboardingView: View {
                     .frame(maxWidth: WideLayout.maxWidth)
                     .padding(WideLayout.centering(geo))
                 } else {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        greeting
-                        Spacer()
-                        actions
+                    // The ways in don't fit a small screen under the greeting: then it all scrolls.
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            Spacer(minLength: 0)
+                            greeting
+                            Spacer(minLength: 12)
+                            actions
+                        }
+                        .padding(24)
+                        .frame(maxWidth: 480)
+                        .frame(maxWidth: .infinity, minHeight: geo.size.height)
                     }
-                    .padding(24)
-                    .frame(maxWidth: 480)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .disabled(model.importing)
         }
         .sheet(isPresented: $manual) { ManualKeySheet { model.submitKey($0) } }
+        .sheet(isPresented: $signingIn) { SignInSheet().environmentObject(model) }
+        #if PURCHASES
+        .sheet(isPresented: $subscribing) { SubscribeSheet().environmentObject(model) }
+        #endif
         .fullScreenCover(isPresented: $scanning) {
             ScannerView(title: "Сканирование QR-кода", hint: "Наведите камеру на QR-код с ключом") { model.submitKey($0) }
         }
+        #if DEMO
+        .onAppear { signingIn = Demo.signIn }
+        #endif
     }
 
     private var greeting: some View {
@@ -70,12 +86,15 @@ struct OnboardingView: View {
                     if CameraInfo.available {
                         wideButton("Сканировать QR-код", icon: "qrcode.viewfinder") { scanning = true }
                     }
-                    wideButton("Войти через Telegram", icon: "paperplane.fill") { openLink(model.config.telegramBotUrl) }
+                    wideButton("Добавить из Telegram", icon: "paperplane.fill") { openLink(model.config.telegramBotUrl) }
                     Text("Бот пришлёт ссылку — просто нажмите на неё")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    // The account page has the button that adds the key to the app.
-                    wideButton("Войти через сайт", icon: "globe") { openLink(model.config.site.installUrl) }
+                    // The site's page that adds the key to the app, a code by email or Sign in with Apple.
+                    wideButton("Войти через сайт", icon: "globe") { signingIn = true }
+                    #if PURCHASES
+                    wideButton("Оформить подписку", icon: "bag") { subscribing = true }
+                    #endif
                 }
             }
             Button("Ввести ключ вручную") { manual = true }

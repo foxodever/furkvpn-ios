@@ -15,7 +15,7 @@ fi
 xcodegen generate
 xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Release \
   -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$OUT/dd" \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" FURK_PURCHASES= build
 APP="$OUT/dd/Build/Products/Release-iphoneos/FurkVPN.app"
 rm -rf "$OUT/Payload" && mkdir -p "$OUT/Payload" && cp -R "$APP" "$OUT/Payload/"
 # Without the keychain groups of Furry LLC's team (the widgets' state): a build signed by someone else can't

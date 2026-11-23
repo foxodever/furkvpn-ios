@@ -127,6 +127,8 @@ scenarios() {
     # The whole list, the sheet pulled up (a wide screen has the list next to the main one, no sheet).
     if [ -z "$wide" ]; then shoot "$udid" "$prefix-$theme-4-full" "$display" -demo -demoConnected -demoServers -demoServersFull; fi
     shoot "$udid" "$prefix-$theme-5-settings" "$display" -demo -demoSettings
+    shoot "$udid" "$prefix-$theme-7-plan" "$display" -demo -demoPlan
+    shoot "$udid" "$prefix-$theme-8-signin" "$display" -demo -demoWelcome -demoSignIn
     if [ -n "$wide" ]; then shoot "$udid" "$prefix-$theme-6-left" "$display" -demo -demoConnected -demoServersLeft; fi
   done
 }

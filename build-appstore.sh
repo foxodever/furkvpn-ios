@@ -7,9 +7,20 @@
 #   ASC_KEY_P8                        the App Store Connect API key (.p8, base64), role App Manager
 # The API key also fetches the App Store provisioning profiles, so they are never stored anywhere.
 # The build number must be new for every upload: CURRENT_PROJECT_VERSION in project.yml.
+#
+# FURK_VARIANT=open makes the build without App Store purchases, for outside TestFlight testers (a TestFlight
+# purchase is free): build number one more than in project.yml, → build/appstore-open/FurkVPN.ipa. The build
+# with purchases goes to the inside testers and to App Review only.
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=build/appstore
+VARIANT=()
+if [ "${FURK_VARIANT:-}" = open ]; then
+  OUT=build/appstore-open
+  NUMBER=$(sed -n 's/^ *CURRENT_PROJECT_VERSION: *"\([0-9]*\)".*/\1/p' project.yml | head -n 1)
+  VARIANT=("FURK_PURCHASES=" "CURRENT_PROJECT_VERSION=$((NUMBER + 1))")
+  echo "Without purchases, build $((NUMBER + 1))"
+fi
 TEAM=2N5KR68546
 ASC_KEY_ID=${ASC_KEY_ID:-THDL4U93NN}
 ASC_ISSUER_ID=${ASC_ISSUER_ID:-dcd4f8a1-f78d-47ca-91bf-b32e0e912659}
@@ -79,7 +90,7 @@ xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Release \
   CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=$TEAM CODE_SIGN_IDENTITY="Apple Distribution" \
   'PROVISIONING_PROFILE_SPECIFIER=$(FURK_PROFILE_$(TARGET_NAME))' \
   "FURK_PROFILE_FurkVPN=$APP_PROFILE" "FURK_PROFILE_FurkTunnel=$TUNNEL_PROFILE" "FURK_PROFILE_FurkWidget=$WIDGET_PROFILE" \
-  OTHER_CODE_SIGN_FLAGS="--keychain $KC" archive
+  OTHER_CODE_SIGN_FLAGS="--keychain $KC" ${VARIANT[@]+"${VARIANT[@]}"} archive
 
 options() {
   cat > "$OUT/$1.plist" <<EOF

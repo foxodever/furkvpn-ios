@@ -112,8 +112,17 @@ final class AppModel: ObservableObject {
     }
     /** Until it is given nothing is sent anywhere: no config, subscription or account requests, no connecting. */
     @Published private(set) var consent: Consent
-    /** «Купить тариф» and «Продлить» on the plan card (PurchaseRegion). */
-    @Published private(set) var showBuy = PurchaseRegion.phoneInRussia
+    /** The account of the key as the site sees it, and whether a plan can be bought in the App Store now. */
+    @Published private(set) var offer: AppOffer?
+    /** The plan sheet of the main screen: the plan, who pays for it, the account. */
+    @Published var planOpen = false
+    /** This Apple ID's subscription or sign-in belongs to another account: its key, offered instead of ours. */
+    @Published var otherAccountKey: String?
+    #if PURCHASES
+    let shop = Shop()
+    #endif
+    /** The plan sheet opens once the key of an account made by a purchase is in: it offers to link an email. */
+    private var planAfterImport = false
 
     let vpn = VPNController()
     private var configFetchedAt = Date.distantPast
@@ -138,8 +147,10 @@ final class AppModel: ObservableObject {
 
     init() {
         config = Store.loadRemoteConfig()?.sanitized() ?? RemoteConfig()
+        AppApi.host = config.site.apiDomain
         subscription = Store.loadSubscription()
         account = Store.loadAccount()
+        offer = subscription == nil ? nil : Self.loadOffer()
         selectedKey = Store.selectedServer
         routing = Store.routing
         subscriptionUpdateHours = Store.subscriptionUpdateHours
@@ -180,14 +191,9 @@ final class AppModel: ObservableObject {
             UIScrollView.appearance().showsHorizontalScrollIndicator = false
             consent = .given
             whitelistCheck = Demo.whitelistCheck
-            // The App Store's screenshots are for every country.
-            showBuy = false
+            offer = Demo.offer
         }
         #endif
-        #if DEMO
-        if Demo.on { return }
-        #endif
-        Task { showBuy = await PurchaseRegion.russia() }
     }
 
     // MARK: Consent
@@ -290,12 +296,16 @@ final class AppModel: ObservableObject {
         // The VPN may have gone down while the app was not running (a Mac asleep), without a word to it.
         vpn.resync()
         syncShared()
+        #if PURCHASES
+        shop.start(self)
+        #endif
         if Date().timeIntervalSince(whitelistCheck?.time ?? .distantPast) > 60 { checkWhitelist() }
         Task {
             // On start the config is always fetched again; later only when older than an hour.
             if coldStart || Date().timeIntervalSince(configFetchedAt) > 3600 { await refreshConfig() }
             guard let info = subscription else { return }
             await refreshAccount(info.url)
+            await refreshOffer()
             try? await enqueue { [weak self] in
                 guard let self, let current = self.subscription, self.isStale(current) else { return }
                 try await self.refreshNow()
@@ -308,6 +318,7 @@ final class AppModel: ObservableObject {
               let answer = try? await Http.get(url), (200..<300).contains(answer.1.statusCode),
               let decoded = try? JSONDecoder().decode(RemoteConfig.self, from: answer.0) else { return }
         config = decoded.sanitized()
+        AppApi.host = config.site.apiDomain
         configFetchedAt = Date()
         Store.saveRemoteConfig(config)
     }
@@ -347,6 +358,92 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Keys
+
+    // MARK: The account behind the key
+
+    private static let offerFile = Store.container.appendingPathComponent("offer.json")
+
+    private static func loadOffer() -> AppOffer? {
+        guard let data = try? Data(contentsOf: offerFile) else { return nil }
+        return try? JSONDecoder().decode(AppOffer.self, from: data)
+    }
+
+    private func setOffer(_ value: AppOffer?) {
+        offer = value
+        if let value, let data = try? JSONEncoder().encode(value) {
+            try? data.write(to: Self.offerFile, options: .atomic)
+        } else {
+            try? FileManager.default.removeItem(at: Self.offerFile)
+        }
+    }
+
+    /** Asked with the plan and after anything that changes the account; otherwise not more often than every ten minutes. */
+    func refreshOffer(force: Bool = false) async {
+        #if DEMO
+        if Demo.on { return }
+        #endif
+        guard consent == .given, let url = subscription?.url else { return }
+        if !force, let fetched = offer?.fetchedAt, Date().timeIntervalSince(fetched) < 600 { return }
+        guard let fresh = try? await AppApi.offer(key: url), subscription?.url == url else { return }
+        setOffer(fresh)
+    }
+
+    /** After a purchase or a link: the servers, the plan and the account again. */
+    func accountChanged() async {
+        await refreshSubscriptionNow(showMessage: false)
+        await refreshOffer(force: true)
+    }
+
+    /** The same account whatever domain its link is on: the last part of the key. */
+    func isCurrentKey(_ key: String) -> Bool {
+        guard let mine = subscription?.shortId, let theirs = URL(string: key)?.pathComponents.last(where: { $0 != "/" }) else { return false }
+        return mine == theirs
+    }
+
+    /**
+     * A key that the server gave for a sign-in: taken as it is when the app has none, nothing new when it is
+     * ours already, offered instead of ours when it is another account's.
+     */
+    func signedIn(_ key: String) {
+        if subscription == nil {
+            submitKey(key)
+        } else if isCurrentKey(key) {
+            Task { await accountChanged() }
+        } else {
+            otherAccountKey = key
+        }
+    }
+
+    /** A purchase reached the server, which answered with the key of the account the subscription belongs to. */
+    func purchaseArrived(_ answer: AppApi.PurchaseAnswer) {
+        guard answer.status == "active", let key = answer.key else { return }
+        if subscription == nil {
+            planAfterImport = answer.newAccount == true
+            submitKey(key)
+        } else if answer.sameAccount == false {
+            otherAccountKey = key
+        } else {
+            Task { await accountChanged() }
+        }
+    }
+
+    /** The person agreed to move to the other account (otherAccountKey). */
+    func switchToOtherAccount() {
+        guard let text = otherAccountKey else { return }
+        otherAccountKey = nil
+        if case let .ok(key) = Core.parseKey(text, allowedHosts: config.allowedSubscriptionHosts) {
+            importKey(key)
+        } else {
+            keyError = "Это не ключ FurkVPN. В приложение можно добавить только ключ FurkVPN."
+        }
+    }
+
+    /** The server has deleted the account: its key is of no use any more. */
+    func accountDeleted() {
+        planOpen = false
+        logout()
+        show("Аккаунт удалён")
+    }
 
     func submitKey(_ text: String?) {
         guard consent == .given else {
@@ -400,6 +497,7 @@ final class AppModel: ObservableObject {
                     Store.clearAccount()
                     self.subscription = info
                     self.account = nil
+                    self.setOffer(nil)
                     self.pings = [:]
                     self.select(info.selectable.first?.key, reconnect: false)
                     // White lists are looked for afresh: a check made before this key had no server to move,
@@ -413,7 +511,13 @@ final class AppModel: ObservableObject {
                 }
                 checkWhitelist()
                 await refreshAccount(key.url, force: true)
+                await refreshOffer(force: true)
+                if planAfterImport {
+                    planAfterImport = false
+                    planOpen = true
+                }
             } catch {
+                planAfterImport = false
                 keyError = (error as? LocalizedError)?.errorDescription ?? SubscriptionError.network(error).errorDescription
             }
         }
@@ -460,6 +564,7 @@ final class AppModel: ObservableObject {
         do {
             try await enqueue { [weak self] in try await self?.refreshNow() }
             if let url = subscription?.url { await refreshAccount(url, force: true) }
+            await refreshOffer(force: true)
             if showMessage { show("Подписка обновлена") }
         } catch {
             show((error as? LocalizedError)?.errorDescription ?? "Не удалось загрузить подписку.")
@@ -474,6 +579,7 @@ final class AppModel: ObservableObject {
                 Store.clearSubscription()
                 self.subscription = nil
                 self.account = nil
+                self.setOffer(nil)
                 self.selectedKey = nil
                 self.pings = [:]
                 self.whitelistCheck = nil
@@ -736,12 +842,5 @@ final class AppModel: ObservableObject {
 
     func clearRoutingRules(_ action: RouteAction) {
         routing.setRules(action, [])
-    }
-
-    // MARK: Links
-
-    var renewUrl: URL? {
-        if let id = subscription?.shortId, !id.isEmpty { return URL(string: config.site.renewalUrl(id)) }
-        return URL(string: config.renewUrl)
     }
 }

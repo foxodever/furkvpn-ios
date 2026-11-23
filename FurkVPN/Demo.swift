@@ -5,7 +5,8 @@ import UIKit
 /**
  * Sample data for screenshots in the iOS Simulator and on the Mac (screenshots.sh builds with the DEMO
  * flag; the IPA never contains this). Launch arguments: -demo (sample subscription), -demoWelcome (no key),
- * -demoConnected, -demoServers, -demoSettings (open that screen), -demoServersFull (the server list's sheet
+ * -demoConnected, -demoServers, -demoSettings (open that screen), -demoPlan (the plan sheet), -demoSignIn (the
+ * sign-in sheet over the welcome screen), -demoServersFull (the server list's sheet
  * pulled all the way up, with -demoServers), -demoServersLeft (the list on the left of a wide window), -demoGlass liquid|matte|flat (Settings → «Стекло»; liquid without it); for the Mac -demoTheme dark|light, -demoWindow 1200x820 (the window's size in points),
  * -demoSnapshot <path> (the app saves a picture of its window there).
  */
@@ -17,6 +18,8 @@ enum Demo {
     static var servers: Bool { args.contains("-demoServers") }
     static var serversFull: Bool { args.contains("-demoServersFull") }
     static var settings: Bool { args.contains("-demoSettings") }
+    static var plan: Bool { args.contains("-demoPlan") }
+    static var signIn: Bool { args.contains("-demoSignIn") }
     static var serversLeft: Bool { args.contains("-demoServersLeft") }
     /** The simulator keeps the app's settings between launches: every launch sets the style. */
     static var glass: String { value("-demoGlass") ?? "liquid" }
@@ -186,6 +189,16 @@ enum Demo {
     static var account: AccountStatus? {
         let json = #"{"found":true,"planName":"Стандарт","expiresAt":\#(Int64(Date().timeIntervalSince1970) + 23 * 86_400),"isFree":false,"trafficUsed":39600000000}"#
         return try? JSONDecoder().decode(AccountStatus.self, from: Data(json.utf8))
+    }
+
+    /** The plan sheet of the screenshots: a plan bought in the App Store, an email linked. */
+    static var offer: AppOffer? {
+        guard !welcome else { return nil }
+        let until = Int64(Date().timeIntervalSince1970) + 23 * 86_400
+        let account = AppAccount(own: true, anonymous: false, email: "m•••@icloud.com", telegram: false, apple: true,
+                                 plan: AppAccount.Plan(id: 3, name: "Стандарт", expire: until, paid: true), payment: "appstore",
+                                 appstore: AppAccount.StoreSubscription(productId: "", expiresAt: until, autoRenew: true, sandbox: false), deleteConfirm: "code")
+        return AppOffer(account: account, canBuy: false, reason: "APP_STORE_ACTIVE", products: [], fetchedAt: Date())
     }
 
     static var config: RemoteConfig {

@@ -65,6 +65,8 @@ workflows:
         script: |
           set -o pipefail
           case "$FURK_RUN" in *" testflight "*) ./build-appstore.sh 2>&1 | tee build-appstore.log ;; *) echo "No [testflight]" ;; esac
+          # The same without App Store purchases, the next build number: for outside testers.
+          case "$FURK_RUN" in *" testflight-open "*) FURK_VARIANT=open ./build-appstore.sh 2>&1 | tee build-appstore-open.log ;; *) echo "No [testflight-open]" ;; esac
       - name: Screenshots
         script: |
           # FURK_SHOTS given with the start: just these devices ("pro max duo ipad ipadmini mac").
@@ -80,5 +82,6 @@ workflows:
       - build/FurkVPN-*-mac-unsigned.zip
       - build/FurkVPN-shots.zip
       - build/appstore/FurkVPN.ipa
+      - build/appstore-open/FurkVPN.ipa
       - "*.log"
       - xcode.txt

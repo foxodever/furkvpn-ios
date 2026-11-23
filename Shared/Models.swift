@@ -104,12 +104,15 @@ struct ServerFilter: Codable, Hashable {
 /** Host names without "https://". */
 struct SiteConfig: Codable {
     var domain: String = "furkvpn.info"
+    /** The site's API: sign-in, the account and App Store purchases of the app (AppApi). */
+    var apiDomain: String = "api.furkvpn.info"
 
     init() {}
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         domain = (try? c.decodeIfPresent(String.self, forKey: .domain)) ?? SiteConfig().domain
+        apiDomain = (try? c.decodeIfPresent(String.self, forKey: .apiDomain)) ?? SiteConfig().apiDomain
     }
 
     /** "Войти через сайт": the account page with the button that adds the key to the app. */
@@ -119,16 +122,11 @@ struct SiteConfig: Codable {
     var privacyUrl: String { "https://\(domain)/privacy" }
     var termsUrl: String { "https://\(domain)/terms" }
 
-    /** "Продлить" / "Купить тариф": the site's payment page for the subscription (its short UUID). */
-    func renewalUrl(_ subscriptionId: String) -> String {
-        let id = subscriptionId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+?#"))) ?? subscriptionId
-        return "https://\(domain)/renewal?sub=\(id)"
-    }
-
     /** "https://furkvpn.info/" becomes "furkvpn.info"; anything that is not a host name falls back to the default. */
     func sanitized() -> SiteConfig {
         var site = SiteConfig()
         if let host = Self.hostName(domain) { site.domain = host }
+        if let host = Self.hostName(apiDomain) { site.apiDomain = host }
         return site
     }
 
@@ -147,7 +145,6 @@ struct RemoteConfig: Codable {
     var allowedSubscriptionHosts = ["*.furkvpn.com", "furkconnection.net"]
     var subscriptionMirrors = ["https://furkconnection.net"]
     var telegramBotUrl = "https://t.me/FurkVPNbot?start=app"
-    var renewUrl = "https://t.me/FurkVPNbot"
     var support = [
         SupportContact(type: "telegram", title: "Telegram", url: "https://t.me/FurkVPNSupport"),
         SupportContact(type: "vk", title: "ВКонтакте", url: "https://vk.me/FurkVPN"),
@@ -182,7 +179,6 @@ struct RemoteConfig: Codable {
         allowedSubscriptionHosts = (try? c.decodeIfPresent([String].self, forKey: .allowedSubscriptionHosts)) ?? d.allowedSubscriptionHosts
         subscriptionMirrors = (try? c.decodeIfPresent([String].self, forKey: .subscriptionMirrors)) ?? d.subscriptionMirrors
         telegramBotUrl = (try? c.decodeIfPresent(String.self, forKey: .telegramBotUrl)) ?? d.telegramBotUrl
-        renewUrl = (try? c.decodeIfPresent(String.self, forKey: .renewUrl)) ?? d.renewUrl
         support = (try? c.decodeIfPresent([SupportContact].self, forKey: .support)) ?? d.support
         links = (try? c.decodeIfPresent([AppLink].self, forKey: .links)) ?? d.links
         site = (try? c.decodeIfPresent(SiteConfig.self, forKey: .site)) ?? d.site
@@ -203,7 +199,6 @@ struct RemoteConfig: Codable {
         c.site = c.site.sanitized()
         c.serverFilters = c.serverFilters.filter { !$0.emoji.trimmingCharacters(in: .whitespaces).isEmpty }
         if c.telegramBotUrl.trimmingCharacters(in: .whitespaces).isEmpty { c.telegramBotUrl = d.telegramBotUrl }
-        if c.renewUrl.trimmingCharacters(in: .whitespaces).isEmpty { c.renewUrl = d.renewUrl }
         if c.delayTestUrl.trimmingCharacters(in: .whitespaces).isEmpty { c.delayTestUrl = d.delayTestUrl }
         return c
     }

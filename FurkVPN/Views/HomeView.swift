@@ -28,6 +28,7 @@ struct HomeView: View {
                     #if DEMO
                     showServers = Demo.servers && !wide
                     model.settingsOpen = Demo.settings
+                    model.planOpen = Demo.plan
                     #endif
                 }
                 .onChange(of: geo.size) { wide = WideLayout.fits($0) }
@@ -50,6 +51,9 @@ struct HomeView: View {
         }
         .sheet(isPresented: $model.settingsOpen) {
             SettingsView(wide: wide).environmentObject(model).environmentObject(vpn)
+        }
+        .sheet(isPresented: $model.planOpen) {
+            PlanSheet().environmentObject(model).environmentObject(vpn)
         }
         .sheet(isPresented: $showSupport) {
             SupportSheet(contacts: model.config.support, subscriptionSupport: model.subscription?.supportUrl, links: model.config.links)
@@ -310,76 +314,6 @@ private struct ServerCard: View {
         }
         .padding(chevron ? 16 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/**
- * Plan, expiry and traffic; "Продлить" two days before the end, "Купить тариф" on the free plan — both only in
- * Russia (PurchaseRegion): elsewhere the App Store doesn't allow links to pay outside it.
- */
-private struct AccountCard: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        let account = model.account
-        let subscription = model.subscription
-        let found = account?.found == true
-        // Fall back to the expiry date from the subscription headers when the API is unreachable.
-        let expiresAt = found ? account?.expiresAt : subscription?.expire
-        let isFree = found && account?.isFree == true
-        let now = Int64(Date().timeIntervalSince1970)
-        let expired = expiresAt.map { $0 <= now } ?? false
-        let endsSoon = expiresAt.map { $0 - now < 2 * 24 * 3600 } ?? false
-        let limit = (found ? account?.trafficLimit : subscription?.total).flatMap { $0 > 0 ? $0 : nil }
-        let used = found ? account?.trafficUsed : subscription.map { ($0.upload ?? 0) + ($0.download ?? 0) }
-
-        if found || expiresAt != nil {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(planTitle(account, expired: expired, isFree: isFree)).font(.headline)
-                if let details = details(expiresAt: expiresAt, expired: expired, isFree: isFree, now: now) {
-                    Text(details)
-                        .font(.subheadline)
-                        .foregroundColor(expired ? .onErrorCard : .secondary)
-                        .wraps()
-                }
-                if let limit, let used {
-                    ProgressView(value: min(max(Double(used) / Double(limit), 0), 1))
-                        .padding(.top, 8)
-                    Text("Использовано \(Format.bytes(used)) из \(Format.bytes(limit)) · осталось \(Format.bytes(max(limit - used, 0)))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .wraps()
-                } else if let used, used > 0 {
-                    Text("Использовано \(Format.bytes(used))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 2)
-                }
-                if (isFree || endsSoon) && model.showBuy {
-                    Button(isFree ? "Купить тариф" : "Продлить") { openLink(model.renewUrl?.absoluteString) }
-                        .glassButtonStyle(prominent: true)
-                        .padding(.top, 8)
-                }
-            }
-            .card(expired ? .errorCard : .card)
-        }
-    }
-
-    // An active plan is shown by name; "Ваша подписка" only when there is none.
-    private func planTitle(_ account: AccountStatus?, expired: Bool, isFree: Bool) -> String {
-        if expired { return "Ваша подписка" }
-        if isFree { return "Бесплатный тариф" }
-        if account?.found == true, let name = account?.planName { return "Тариф «\(name)»" }
-        return "Ваша подписка"
-    }
-
-    private func details(expiresAt: Int64?, expired: Bool, isFree: Bool, now: Int64) -> String? {
-        if expired { return "Подписка закончилась" }
-        if let expiresAt {
-            let days = max(Int((expiresAt - now) / 86_400), 0)
-            return "Действует до \(Format.date(expiresAt)) · Осталось \(Format.days(days))"
-        }
-        return isFree ? nil : "Без срока окончания"
     }
 }
 

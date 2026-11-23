@@ -341,7 +341,7 @@ struct ManualKeySheet: View {
     }
 }
 
-/** Alerts shared by the welcome screen and the settings: key errors and "replace the key?". */
+/** Alerts shared by the welcome screen, the settings and the sheets of the account: key errors, "replace the key?", another account found. */
 struct KeyAlerts: ViewModifier {
     @EnvironmentObject private var model: AppModel
 
@@ -364,6 +364,12 @@ struct KeyAlerts: ViewModifier {
                 Button("Отмена", role: .cancel) {}
             } message: {
                 Text("Телевизор с кодом \(Self.display(model.tvSend ?? "")) подключится к вашей подписке FurkVPN.")
+            }
+            .alert("Найден другой аккаунт", isPresented: Binding(get: { model.otherAccountKey != nil }, set: { if !$0 { model.otherAccountKey = nil } })) {
+                Button("Перейти на него") { model.switchToOtherAccount() }
+                Button("Остаться", role: .cancel) {}
+            } message: {
+                Text("Подписка App Store или вход через Apple привязаны к другому аккаунту FurkVPN. Перейти на него? Ключ в приложении заменится.")
             }
     }
 }

@@ -6,12 +6,13 @@
 # Group with no provisioning profile. So this one shows the interface only; the VPN needs the build
 # signed by the developer account for the Mac App Store (the only way Apple allows a VPN app extension on
 # a Mac, see TN3134), with FurkVPN-mac.entitlements / FurkTunnel-mac.entitlements.
+# No App Store purchases in it (FURK_PURCHASES=): StoreKit has nothing to sell to an app without a receipt.
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=build
 xcodebuild -project FurkVPN.xcodeproj -scheme FurkVPN -configuration Release \
   -destination 'generic/platform=macOS,variant=Mac Catalyst' -derivedDataPath "$OUT/dd-mac" \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" FURK_PURCHASES= build
 APP="$OUT/dd-mac/Build/Products/Release-maccatalyst/FurkVPN.app"
 lipo -info "$APP/Contents/MacOS/FurkVPN"
 codesign -f -s - "$APP/Contents/PlugIns/FurkTunnel.appex"

@@ -219,7 +219,7 @@ enum Store {
     }
 
     /** The version of the consent text the app asks for now (ConsentView.swift: raise it when the text says more). */
-    static let consentCurrent = 1
+    static let consentCurrent = 2
 
     static var consentGiven: Bool { consentVersion >= consentCurrent }
 

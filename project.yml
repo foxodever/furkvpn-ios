@@ -13,7 +13,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "1.3.6"
-    CURRENT_PROJECT_VERSION: "25"
+    CURRENT_PROJECT_VERSION: "26"
     CODE_SIGN_STYLE: Automatic
     ENABLE_BITCODE: NO
     DEAD_CODE_STRIPPING: YES
@@ -35,7 +35,10 @@ targets:
         DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
         "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": FurkVPN/FurkVPN-mac.entitlements
         # ControlIntent.swift is built into FurkWidget too; only the app's copy switches the VPN.
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) FURK_APP"
+        # PURCHASES: App Store purchases (Shop.swift). A build made with FURK_PURCHASES= has none: the one
+        # for outside TestFlight testers, where a purchase is free and would give the VPN away.
+        FURK_PURCHASES: PURCHASES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) FURK_APP $(FURK_PURCHASES)"
     dependencies:
       - target: FurkTunnel
       # The widgets and the Control Center button (iOS 18); not on the Mac.
